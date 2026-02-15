@@ -1,0 +1,29 @@
+# --- Seguridad (CRÍTICO) ---
+*.json
+*.key
+*.pem
+.env
+keys/
+config/google_credentials.json
+secrets/
+
+# --- Python ---
+__pycache__/
+*.pyc
+venv/
+dbt-env/
+.pytest_cache/
+
+# --- Airflow ---
+logs/
+airflow-worker.pid
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# --- dbt ---
+dbt_packages/
+target/
+logs/
+
+# --- OS ---
+.DS_Store
