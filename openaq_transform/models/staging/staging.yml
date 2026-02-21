@@ -1,0 +1,61 @@
+version: 2
+
+models:
+  - name: stg_openaq__locations
+    description: "Silver layer containing physical station details and metadata (daily snapshots)."
+    columns:
+      - name: record_id
+        description: "Surrogate key for the record (hash of location_id and logical_date)."
+        tests:
+          - unique
+          - not_null
+      - name: location_id
+        description: "Natural identifier for the location."
+        tests:
+          - not_null
+      - name: latitude
+        description: "Latitude coordinate of the station."
+      - name: longitude
+        description: "Longitude coordinate of the station."
+
+  - name: stg_openaq__measurements
+    description: "Silver layer containing air quality measurement facts."
+    columns:
+      - name: measurement_id
+        description: "Surrogate primary key for the measurement (hash of sensor, parameter, and timestamp)."
+        tests:
+          - unique
+          - not_null
+      - name: sensor_id
+        description: "ID of the sensor associated with the measurement."
+        tests:
+          - not_null
+      - name: parameter_id
+        description: "ID of the measured parameter (e.g., PM2.5, Humidity). Kept in fact table for robust joins and fast filtering."
+        tests:
+          - not_null
+      - name: measurement_value
+        description: "Numeric value of the recorded measurement."
+        tests:
+          - not_null
+
+  - name: stg_openaq__sensors
+    description: "Silver layer containing sensors associated with each location."
+    columns:
+      - name: sensor_record_id
+        description: "Surrogate key for the sensor record (hash of sensor_id and logical_date)."
+        tests:
+          - unique
+          - not_null
+      - name: location_id
+        description: "ID of the parent location where the sensor is installed."
+        tests:
+          - not_null
+      - name: sensor_id
+        description: "Natural identifier for the sensor."
+        tests:
+          - not_null
+      - name: parameter_id
+        description: "ID of the measured parameter."
+        tests:
+          - not_null

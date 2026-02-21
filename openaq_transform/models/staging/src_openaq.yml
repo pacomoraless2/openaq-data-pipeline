@@ -1,0 +1,36 @@
+version: 2
+
+sources:
+  - name: openaq
+    database: data-platform-project-485710
+    schema: openAQ_raw
+    description: "Raw data ingested from the OpenAQ API using Apache Airflow."
+
+    tables:
+      - name: raw_locations
+        description: "Air quality monitoring locations. Partitioned by logical date."
+        columns:
+          - name: data
+            description: "Raw JSON data containing location information."
+          - name: _audit_run_id
+            description: "Airflow run ID for tracking the ingestion process."
+            tests:
+              - not_null
+          - name: _audit_logical_date
+            description: "Logical date of the ingestion run."
+            tests:
+              - not_null
+
+      - name: raw_measurements
+        description: "Fact table containing air quality measurements. Partitioned by logical date and clustered by sensor ID."
+        columns:
+          - name: data
+            description: "Raw JSON data containing measurement values."
+          - name: _audit_sensor_id
+            description: "ID of the sensor extracted in real-time. Used for clustering."
+            tests:
+              - not_null
+          - name: _audit_logical_date
+            description: "Logical date of the partition."
+            tests:
+              - not_null
