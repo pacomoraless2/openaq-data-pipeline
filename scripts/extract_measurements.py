@@ -117,7 +117,7 @@ def fetch_measurements(api_url, api_key, sensor_id, date_from, date_to):
             for res in results:
                 try:
                     # We try to create a unique key based on the measurement's timestamp and value
-                    unique_key = f"{res.get('period', {}).get('datetime', {}).get('utc')}-{res.get('value')}"
+                    unique_key = f"{res.get('period', {}).get('datetimeFrom', {}).get('utc')}-{res.get('value')}"
                     if unique_key not in seen_measurement_ids:
                         seen_measurement_ids.add(unique_key)
                         new_results.append(res)

@@ -1,11 +1,8 @@
-# Name your project! Project names should contain only lowercase characters
-# and underscores. A good package name should reflect your organization's
-# name or the intended use of these models
 name: "openaq_transform"
 version: "1.0.0"
 config-version: 2
 
-# This setting configures which "profile" dbt uses for this project.
+# This setting configures which profile dbt uses for this project.
 profile: "openaq_transform"
 
 # These configurations specify where dbt should look for different types of files.
@@ -16,7 +13,8 @@ seed-paths: ["seeds"]
 macro-paths: ["macros"]
 snapshot-paths: ["snapshots"]
 
-clean-targets: # directories to be removed by `dbt clean`
+# Directories to be removed by `dbt clean`
+clean-targets:
   - "target"
   - "dbt_packages"
 
@@ -28,17 +26,17 @@ models:
     # First layer: cleansing
     staging:
       +materialized: view
-      +schema: openAQ_staging
-      +tags: ["bronze", "daily"]
+      +schema: openaq_staging
+      +tags: ["silver", "daily", "staging"]
 
-    # Second
+    # Second layer: joins
     intermediate:
-      +materialized: view # O 'ephemeral' si no quieres ensuciar BigQuery
-      +schema: openAQ_intermediate
-      +tags: ["silver", "daily"]
+      +materialized: view # ephemeral would be acceptable, but view for debugging
+      +schema: openaq_intermediate
+      +tags: ["silver", "daily", "intermediate"]
 
-    # Capa 3: Consumo
+    # Third: consumption layer
     marts:
       +materialized: table
-      +schema: openAQ_marts
-      +tags: ["gold", "daily"]
+      +schema: openaq_marts
+      +tags: ["gold", "daily", "marts"]
