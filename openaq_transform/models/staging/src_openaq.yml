@@ -2,7 +2,7 @@ version: 2
 
 sources:
   - name: openaq
-    schema: openAQ_raw
+    schema: openaq_raw
     description: "Raw data ingested from the OpenAQ API using Apache Airflow."
 
     tables:

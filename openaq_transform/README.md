@@ -39,7 +39,7 @@ Ensure you have dbt-bigquery installed.
 
 A valid Google Cloud Service Account with BigQuery Data Editor and Job User roles.
 
-Your ~/.dbt/profiles.yml correctly configured to point to the spicific region where your dataset is located.
+Your ~/.dbt/profiles.yml correctly configured to point to the specific region where your dataset is located.
 
 ### 2. Install Dependencies
 
