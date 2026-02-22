@@ -1,4 +1,13 @@
-import sys
+"""
+OpenAQ Measurements Extraction Pipeline
+
+This script parses location metadata from GCS to extract active sensor IDs,
+fetches historical measurements (time-series data) for those sensors from the OpenAQ API,
+and streams the results back to GCS in chunked NDJSON files.
+"""
+
+import os
+import argparse
 import json
 import logging
 import requests
@@ -7,72 +16,71 @@ from datetime import datetime, timezone, timedelta
 from google.cloud import storage
 from google.auth import default
 
-# Logging configuration
+# Configure basic logging for pipeline monitoring
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Constants
 MAX_RETRIES = 3
 
 
 def get_gcs_client():
     """
-    Initializes and returns a Google Cloud Storage client with default credentials.
+    Initializes and returns a Google Cloud Storage client.
     """
     creds, _ = default()
     return storage.Client(credentials=creds)
 
 
-def get_sensor_ids_from_locations_json(bucket_name, input_prefix):
+def get_sensor_ids_from_locations_json(bucket_name, input_prefix, run_id):
     """
-    Scans NDJSON location files in a GCS bucket and extracts a list of unique sensor IDs.
+    Reads upstream location data from GCS (SSoT) to extract a unique set of sensor IDs.
+    Implements a streaming read approach to guarantee memory safety.
     """
     client = get_gcs_client()
     bucket = client.bucket(bucket_name)
 
     blobs = list(bucket.list_blobs(prefix=input_prefix))
 
-    if not blobs:
-        logger.warning(f"No entry files found in: gs://{bucket_name}/{input_prefix}")
-        return []
-
+    # Filter by pipeline run ID to prevent mixing data from previous or parallel executions (idempotency constraint)
+    target_filename = f"locations_details_{run_id}.ndjson"
     sensor_ids = set()
 
-    logger.info(f"Processing {len(blobs)} location files...")
-
     for blob in blobs:
-        if not blob.name.endswith(".ndjson"):
+        if not blob.name.endswith(target_filename):
             continue
 
-        content = blob.download_as_text()
-        for line in content.splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-                location_data = record.get("data", {})
-                sensors = location_data.get("sensors", [])
-                for s in sensors:
-                    if "id" in s:
-                        sensor_ids.add(s["id"])
-            except json.JSONDecodeError:
-                continue
+        # Process the NDJSON file stream line-by-line.
+        # This prevents Out-Of-Memory (OOM) errors when handling gigabyte-scale files.
+        with blob.open("rt") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                    sensors = record.get("data", {}).get("sensors", [])
+                    for s in sensors:
+                        if "id" in s:
+                            sensor_ids.add(s["id"])
+                except json.JSONDecodeError:
+                    # Silently skip malformed JSON lines to keep the pipeline running
+                    continue
 
-    logger.info(f"Total number of unique sensor IDs: {len(sensor_ids)}")
+    logger.info(f"Unique sensor IDs to process: {len(sensor_ids)}")
     return list(sensor_ids)
 
 
 def upload_chunk_to_gcs(bucket_name, object_path, data_list):
     """
-    Uploads a list of dictionary records as an NDJSON file to a specific GCS bucket path.
+    Serializes a chunk of data to NDJSON and uploads it to the GCS sink.
     """
     if not data_list:
         return
+
     client = get_gcs_client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(object_path)
+    blob = client.bucket(bucket_name).blob(object_path)
+
     ndjson_content = "\n".join(
         [json.dumps(record, ensure_ascii=False) for record in data_list]
     )
@@ -84,12 +92,11 @@ def upload_chunk_to_gcs(bucket_name, object_path, data_list):
 
 def fetch_measurements(api_url, api_key, sensor_id, date_from, date_to):
     """
-    Fetches paginated sensor measurements from the external API for a specific time window.
-    Includes duplicate mitigation logic.
+    Retrieves time-series measurements for a specific sensor within a time window.
+    Handles API pagination and deduplicates overlapping records.
     """
     url = f"{api_url}/sensors/{sensor_id}/measurements"
-    headers = {"X-API-Key": api_key}
-
+    headers = {"X-API-Key": api_key} if api_key else {}
     params = {
         "limit": 1000,
         "page": 1,
@@ -98,7 +105,6 @@ def fetch_measurements(api_url, api_key, sensor_id, date_from, date_to):
     }
 
     all_measurements = []
-    # Duplicate avoidance set for hot API duplicates
     seen_measurement_ids = set()
 
     while True:
@@ -109,24 +115,20 @@ def fetch_measurements(api_url, api_key, sensor_id, date_from, date_to):
                 return []
 
             response.raise_for_status()
-            data = response.json()
-            results = data.get("results", [])
 
-            # Hotfix for API duplicates
-            new_results = []
+            results = response.json().get("results", [])
             for res in results:
                 try:
-                    # We try to create a unique key based on the measurement's timestamp and value
+                    # Construct a composite key to deduplicate records that might overlap across pages
                     unique_key = f"{res.get('period', {}).get('datetimeFrom', {}).get('utc')}-{res.get('value')}"
                     if unique_key not in seen_measurement_ids:
                         seen_measurement_ids.add(unique_key)
-                        new_results.append(res)
+                        all_measurements.append(res)
                 except Exception:
-                    # If any key is missing, we just add the measurement without deduplication (to avoid losing data)
-                    new_results.append(res)
+                    # Fallback: if the composite key fails due to schema changes, append anyway
+                    all_measurements.append(res)
 
-            all_measurements.extend(new_results)
-
+            # Break pagination loop if the returned batch is smaller than the limit
             if len(results) < params["limit"]:
                 break
 
@@ -140,101 +142,96 @@ def fetch_measurements(api_url, api_key, sensor_id, date_from, date_to):
     return all_measurements
 
 
-def main(
-    run_id, logical_date, bucket_name, input_base_dir, output_base_dir, api_url, api_key
-):
-    """
-    Main orchestration function: establishes time windows, extracts sensor IDs,
-    fetches corresponding measurements, applies audit metadata, and uploads to GCS in chunks.
-    """
-    # 1. Time window setup
-    dt_run = datetime.strptime(logical_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+def main(args):
+    api_key = os.environ.get("OPENAQ_API_KEY", "")
+
+    dt_run = datetime.strptime(args.logical_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
     date_to = dt_run.isoformat()
     date_from = (dt_run - timedelta(days=1)).isoformat()
+    path_date = f"{dt_run.year}/{dt_run.month:02d}/{dt_run.day:02d}"
+    batch_ts = datetime.now(timezone.utc).isoformat()
 
-    # Path structure: YYYY/MM/DD
-    path_date_struct = f"{dt_run.year}/{dt_run.month:02d}/{dt_run.day:02d}"
-
-    # Batch extraction timestamp (for audit trailing)
-    batch_extraction_ts = datetime.now(timezone.utc).isoformat()
-
-    # 2. Extract Sensor IDs from Locations
-    input_prefix = f"{input_base_dir}/{path_date_struct}/"
-    sensor_ids = get_sensor_ids_from_locations_json(bucket_name, input_prefix)
+    sensor_ids = get_sensor_ids_from_locations_json(
+        args.bucket_name, f"{args.input_base_dir}/{path_date}/", args.run_id
+    )
 
     if not sensor_ids:
-        logger.warning("No sensor IDs found. Finalizing process.")
+        logger.warning("No sensors found.")
+        # Ensure empty file is created even if no sensors exist
+        empty_path = f"{args.output_base_dir}/{path_date}/measurements_{args.run_id}_EMPTY.ndjson"
+        get_gcs_client().bucket(args.bucket_name).blob(empty_path).upload_from_string(
+            "", content_type="application/x-ndjson"
+        )
         return
 
-    # 3. Processing sensors and measurements
-    buffer = []
-    chunk_size = 2000
-    file_counter = 0
-    total_processed = 0
+    buffer, chunk_size, file_counter, total_processed = [], 2000, 0, 0
 
     for sensor_id in sensor_ids:
         measurements = fetch_measurements(
-            api_url, api_key, sensor_id, date_from, date_to
+            args.api_url, api_key, sensor_id, date_from, date_to
         )
 
-        if measurements:
-            for m in measurements:
-                record = {
+        for m in measurements:
+            buffer.append(
+                {
                     "data": m,
-                    "_audit_run_id": run_id,
+                    "_audit_run_id": args.run_id,
                     "_audit_sensor_id": sensor_id,
-                    "_audit_logical_date": logical_date,
-                    "_audit_extracted_at": batch_extraction_ts,
+                    "_audit_logical_date": args.logical_date,
+                    "_audit_extracted_at": batch_ts,
                 }
-                buffer.append(record)
+            )
 
-            total_processed += len(measurements)
+        total_processed += len(measurements)
 
         if len(buffer) >= chunk_size:
-            file_name = f"measurements_{run_id}_part{file_counter}.ndjson"
-            output_path = f"{output_base_dir}/{path_date_struct}/{file_name}"
-
+            output_path = f"{args.output_base_dir}/{path_date}/measurements_{args.run_id}_part{file_counter}.ndjson"
             for r in buffer:
-                r["_audit_gcs_filename"] = f"gs://{bucket_name}/{output_path}"
-
-            upload_chunk_to_gcs(bucket_name, output_path, buffer)
-            buffer = []
-            file_counter += 1
+                r["_audit_gcs_filename"] = f"gs://{args.bucket_name}/{output_path}"
+            upload_chunk_to_gcs(args.bucket_name, output_path, buffer)
+            buffer, file_counter = [], file_counter + 1
 
         time.sleep(0.05)
 
-    # 4. Final chunk upload
     if buffer:
-        file_name = f"measurements_{run_id}_part{file_counter}.ndjson"
-        output_path = f"{output_base_dir}/{path_date_struct}/{file_name}"
-
+        output_path = f"{args.output_base_dir}/{path_date}/measurements_{args.run_id}_part{file_counter}.ndjson"
         for r in buffer:
-            r["_audit_gcs_filename"] = f"gs://{bucket_name}/{output_path}"
+            r["_audit_gcs_filename"] = f"gs://{args.bucket_name}/{output_path}"
+        upload_chunk_to_gcs(args.bucket_name, output_path, buffer)
 
-        upload_chunk_to_gcs(bucket_name, output_path, buffer)
-
+    # STRICT FALLBACK: Always generate a file for BigQuery to consume
     if total_processed == 0:
-        logger.warning("No measurements found. Generating empty file.")
-        empty_filename = f"measurements_{run_id}_EMPTY.ndjson"
-        empty_path = f"{output_base_dir}/{path_date_struct}/{empty_filename}"
-        client = get_gcs_client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(empty_path)
-        blob.upload_from_string("", content_type="application/x-ndjson")
-
-    logger.info(f"Processing complete. Total records processed: {total_processed}")
+        logger.warning(
+            "No measurements found. Generating empty file to satisfy downstream dependencies."
+        )
+        empty_path = f"{args.output_base_dir}/{path_date}/measurements_{args.run_id}_EMPTY.ndjson"
+        get_gcs_client().bucket(args.bucket_name).blob(empty_path).upload_from_string(
+            "", content_type="application/x-ndjson"
+        )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 8:
-        logger.error("Insufficient arguments provided. Exiting.")
-        sys.exit(1)
-    main(
-        sys.argv[1],
-        sys.argv[2],
-        sys.argv[3],
-        sys.argv[4],
-        sys.argv[5],
-        sys.argv[6],
-        sys.argv[7],
+    parser = argparse.ArgumentParser(
+        description="Extract OpenAQ sensor measurements based on upstream locations."
     )
+    parser.add_argument(
+        "run_id", help="Unique identifier for the current pipeline run."
+    )
+    parser.add_argument(
+        "logical_date", help="Execution logical date in YYYY-MM-DD format."
+    )
+    parser.add_argument(
+        "bucket_name", help="GCS bucket name for both input and output."
+    )
+    parser.add_argument(
+        "input_base_dir", help="Base directory path for the input NDJSON."
+    )
+    parser.add_argument(
+        "output_base_dir", help="Base directory path for the output measurements."
+    )
+    parser.add_argument("api_url", help="Base URL for the OpenAQ API.")
+
+    args = parser.parse_args()
+    main(args)
