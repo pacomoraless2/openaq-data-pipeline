@@ -1,20 +1,19 @@
-import logging
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import (
     GCSToBigQueryOperator,
 )
 from airflow.models import Variable
-from airflow.hooks.base import BaseHook
 from airflow.utils.dates import days_ago
 from datetime import timedelta
 
 # --- GLOBAL CONFIGURATION ---
-SPREADSHEET_ID = "1Ntnk0ymYXWurxKd7zclZengWjOB93fS9d8zUa8bTnII"
-SHEET_RANGE = "openAQ_Locations"
-BUCKET_NAME = "openaq-airflow"
-PROJECT_ID = "data-platform-project-485710"
-DATASET_RAW = "openAQ_raw"
+# Using Airflow Variables with defaults ensures code portability across environments (Dev/Prod)
+SPREADSHEET_ID = Variable.get("OPENAQ_SPREADSHEET_ID")
+SHEET_RANGE = Variable.get("OPENAQ_SHEET_RANGE")
+BUCKET_NAME = Variable.get("GCS_BUCKET_NAME")
+PROJECT_ID = Variable.get("GCP_PROJECT_ID")
+DATASET_RAW = Variable.get("BQ_DATASET_RAW")
 
 # --- GCS PATHS (Namespaces) ---
 BASE_DIR_CSV = Variable.get("LOCATIONS_BASE_PATH", default_var="raw/locations_id_csv")
@@ -24,24 +23,6 @@ BASE_DIR_JSON_LOCS = Variable.get(
 BASE_DIR_JSON_MEAS = Variable.get(
     "MEASUREMENTS_JSON_PATH", default_var="raw/measurements_json"
 )
-
-
-# --- CREDENTIALS FUNCTION ---
-def get_openaq_creds():
-    """
-    Safely retrieves API credentials from Airflow connections to prevent DAG parsing errors.
-    """
-    try:
-        conn = BaseHook.get_connection("openaq_api")
-        return conn.host, conn.password
-    except Exception as e:
-        logging.warning(
-            f"Could not retrieve 'openaq_api' connection. Using defaults. Error: {e}"
-        )
-        return "https://api.openaq.org/v2", ""
-
-
-API_URL, API_KEY = get_openaq_creds()
 
 # --- DEFAULT ARGS ---
 default_args = {
@@ -65,11 +46,14 @@ with DAG(
     month = "{{ execution_date.strftime('%m') }}"
     day = "{{ execution_date.strftime('%d') }}"
 
+    # Secure credential extraction using Airflow macros (Prevents top-level DB calls)
+    API_URL = "{{ conn.openaq_api.host | default('https://api.openaq.org/v3') }}"
+    API_KEY = "{{ conn.openaq_api.password | default('') }}"
+
     # =========================================================================
     # PHASE 1: PARAMETER INGESTION (SSoT)
     # =========================================================================
 
-    # 1. Sheet -> GCS (CSV)
     extract_ids_task = BashOperator(
         task_id="extract_sheets_to_gcs",
         bash_command=(
@@ -79,7 +63,6 @@ with DAG(
         ),
     )
 
-    # 2. GCS (CSV) -> BigQuery (Control Table)
     load_control_table = GCSToBigQueryOperator(
         task_id="load_control_requests_to_bq",
         bucket=BUCKET_NAME,
@@ -100,7 +83,6 @@ with DAG(
     # PHASE 2: LOCATION DETAILS EXTRACTION (Dimensions)
     # =========================================================================
 
-    # 3. GCS (CSV) -> API -> GCS (Locations NDJSON)
     extract_details_task = BashOperator(
         task_id="extract_openaq_details",
         bash_command=(
@@ -110,7 +92,6 @@ with DAG(
         ),
     )
 
-    # 4. GCS (NDJSON) -> BigQuery (raw_locations)
     load_raw_locations_task = GCSToBigQueryOperator(
         task_id="load_locations_to_bq",
         bucket=BUCKET_NAME,
@@ -137,17 +118,15 @@ with DAG(
     # PHASE 3: MEASUREMENTS EXTRACTION (Facts)
     # =========================================================================
 
-    # 5. GCS (Locations JSON) -> API -> GCS (Measurements NDJSON)
     extract_measurements_task = BashOperator(
         task_id="extract_openaq_measurements",
         bash_command=(
             "python /opt/airflow/scripts/extract_measurements.py "
-            "{{ run_id }} {{ ds }} "  # {{ ds }} is the logical date used by the script
+            "{{ run_id }} {{ ds }} "
             f"{BUCKET_NAME} {BASE_DIR_JSON_LOCS} {BASE_DIR_JSON_MEAS} '{API_URL}' '{API_KEY}'"
         ),
     )
 
-    # 6. GCS (NDJSON) -> BigQuery (raw_measurements)
     load_raw_measurements_task = GCSToBigQueryOperator(
         task_id="load_measurements_to_bq",
         bucket=BUCKET_NAME,
@@ -159,20 +138,30 @@ with DAG(
         write_disposition="WRITE_APPEND",
         create_disposition="CREATE_IF_NEEDED",
         ignore_unknown_values=True,
-        # --- FINAL ENTERPRISE SCHEMA ---
         schema_fields=[
-            {"name": "data", "type": "JSON", "mode": "NULLABLE"},  # RAW JSON
+            {"name": "data", "type": "JSON", "mode": "NULLABLE"},
             {"name": "_audit_run_id", "type": "STRING", "mode": "NULLABLE"},
             {"name": "_audit_sensor_id", "type": "INTEGER", "mode": "NULLABLE"},
-            # 1. Partition Key (Logical Date)
             {"name": "_audit_logical_date", "type": "DATE", "mode": "NULLABLE"},
-            # 2. Cluster Key (Actual extraction timestamp)
             {"name": "_audit_extracted_at", "type": "TIMESTAMP", "mode": "NULLABLE"},
             {"name": "_audit_gcs_filename", "type": "STRING", "mode": "NULLABLE"},
         ],
-        # STRATEGY: Partition by DAY (Logical) + Cluster by Timestamp
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
         cluster_fields=["_audit_sensor_id", "_audit_extracted_at"],
+    )
+
+    # =========================================================================
+    # PHASE 4: DATA TRANSFORMATION (dbt)
+    # =========================================================================
+
+    run_dbt_models_task = BashOperator(
+        task_id="run_dbt_models",
+        bash_command=(
+            "source /opt/airflow/dbt_venv/bin/activate && "
+            "cd /opt/airflow/openaq_transform && "
+            "dbt deps && "
+            "dbt build --profiles-dir ."
+        ),
     )
 
     # =========================================================================
@@ -182,3 +171,4 @@ with DAG(
     extract_ids_task >> [load_control_table, extract_details_task]
     extract_details_task >> [load_raw_locations_task, extract_measurements_task]
     extract_measurements_task >> load_raw_measurements_task
+    load_raw_measurements_task >> run_dbt_models_task
