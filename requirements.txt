@@ -1,0 +1,4 @@
+# Python requirements for Airflow Workers
+pandas==2.1.4
+requests==2.31.0
+google-api-python-client==2.111.0

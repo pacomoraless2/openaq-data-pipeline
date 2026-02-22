@@ -72,6 +72,9 @@ x-airflow-common:
     AIRFLOW_VAR_GCS_BUCKET_NAME: ${AIRFLOW_VAR_GCS_BUCKET_NAME}
     AIRFLOW_VAR_GCP_PROJECT_ID: ${AIRFLOW_VAR_GCP_PROJECT_ID}
     AIRFLOW_VAR_BQ_DATASET_RAW: ${AIRFLOW_VAR_BQ_DATASET_RAW}
+    AIRFLOW_VAR_LOCATIONS_BASE_PATH: ${AIRFLOW_VAR_LOCATIONS_BASE_PATH}
+    AIRFLOW_VAR_LOCATIONS_JSON_PATH: ${AIRFLOW_VAR_LOCATIONS_JSON_PATH}
+    AIRFLOW_VAR_MEASUREMENTS_JSON_PATH: ${AIRFLOW_VAR_MEASUREMENTS_JSON_PATH}
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
