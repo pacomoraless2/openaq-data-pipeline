@@ -1,4 +1,4 @@
-# --- Seguridad (CRÍTICO) ---
+# --- Security (critical) ---
 *.json
 *.key
 *.pem
@@ -24,6 +24,8 @@ standalone_admin_password.txt
 dbt_packages/
 target/
 logs/
+# dbt telemetry
+.user.yml
 
 # --- OS ---
 .DS_Store

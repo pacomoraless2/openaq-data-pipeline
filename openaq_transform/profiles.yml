@@ -1,0 +1,12 @@
+openaq_transform:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: data-platform-project-485710
+      dataset: openaq_raw
+      threads: 4
+      keyfile: /opt/airflow/keys/airflow-bq.json
+      location: europe-southwest1
+      priority: interactive

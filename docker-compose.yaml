@@ -63,6 +63,15 @@ x-airflow-common:
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW_IMAGE_NAME: airflow-custom:latest
     GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/keys/airflow-bq.json
+    #CONNECTIONS FROM .ENV
+    AIRFLOW_CONN_OPENAQ_API: ${AIRFLOW_CONN_OPENAQ_API}
+    AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT: ${AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT}
+    #VARIABLES FROM .ENV
+    AIRFLOW_VAR_OPENAQ_SPREADSHEET_ID: ${AIRFLOW_VAR_OPENAQ_SPREADSHEET_ID}
+    AIRFLOW_VAR_OPENAQ_SHEET_RANGE: ${AIRFLOW_VAR_OPENAQ_SHEET_RANGE}
+    AIRFLOW_VAR_GCS_BUCKET_NAME: ${AIRFLOW_VAR_GCS_BUCKET_NAME}
+    AIRFLOW_VAR_GCP_PROJECT_ID: ${AIRFLOW_VAR_GCP_PROJECT_ID}
+    AIRFLOW_VAR_BQ_DATASET_RAW: ${AIRFLOW_VAR_BQ_DATASET_RAW}
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -82,6 +91,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts
     - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
     - ${AIRFLOW_PROJ_DIR:-.}/keys:/opt/airflow/keys
+    - ${AIRFLOW_PROJ_DIR:-.}/openaq_transform:/opt/airflow/openaq_transform
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
