@@ -1,12 +1,13 @@
 import os
 from airflow import DAG, Dataset
 from airflow.operators.bash import BashOperator
+from airflow.operators.empty import EmptyOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import (
     GCSToBigQueryOperator,
 )
 from datetime import datetime, timedelta
 
-# --- ENVIRONMENT VARIABLES (Strict Mode: Fails instantly if missing) ---
+# --- ENVIRONMENT VARIABLES ---
 PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
 DATASET_RAW = os.environ["AIRFLOW_VAR_BQ_DATASET_RAW"]
 BUCKET_NAME = os.environ["AIRFLOW_VAR_GCS_BUCKET_NAME"]
@@ -85,7 +86,7 @@ with DAG(
         task_id="load_locations_to_bq",
         bucket=BUCKET_NAME,
         source_objects=[
-            f"{BASE_DIR_JSON_LOCS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/locations_details_{{{{ run_id }}}}.ndjson"
+            f"{BASE_DIR_JSON_LOCS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/locations_details_{{{{ run_id }}}}_*.ndjson"
         ],
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_locations",
         source_format="NEWLINE_DELIMITED_JSON",
@@ -123,7 +124,7 @@ with DAG(
         task_id="load_measurements_to_bq",
         bucket=BUCKET_NAME,
         source_objects=[
-            f"{BASE_DIR_JSON_MEAS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/measurements_{{{{ run_id }}}}*.ndjson"
+            f"{BASE_DIR_JSON_MEAS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/measurements_{{{{ run_id }}}}_*.ndjson"
         ],
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_measurements",
         source_format="NEWLINE_DELIMITED_JSON",
@@ -132,7 +133,7 @@ with DAG(
         ignore_unknown_values=True,
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
         cluster_fields=["_audit_sensor_id", "_audit_extracted_at"],
-        outlets=[raw_measurements_dataset],
+        # Dataset trigger removed from here; moved to finalize_ingestion
         autodetect=False,
         schema_fields=[
             {"name": "data", "type": "JSON", "mode": "NULLABLE"},
@@ -145,9 +146,25 @@ with DAG(
     )
 
     # =========================================================================
+    # PHASE 4: FINAL CONVERGENCE POINT WITH THE DBT DATASET TRIGGER
+    # =========================================================================
+
+    finalize_ingestion = EmptyOperator(
+        task_id="finalize_ingestion", outlets=[raw_measurements_dataset]
+    )
+
+    # =========================================================================
     # ORCHESTRATION
     # =========================================================================
 
+    # Extraction and load dependencies
     extract_ids_task >> [load_control_table, extract_details_task]
     extract_details_task >> [load_locations_to_bq, extract_measurements_task]
     extract_measurements_task >> load_raw_measurements_task
+
+    # Join pattern: Ensure all 3 BigQuery loads succeed before triggering dbt
+    [
+        load_control_table,
+        load_locations_to_bq,
+        load_raw_measurements_task,
+    ] >> finalize_ingestion

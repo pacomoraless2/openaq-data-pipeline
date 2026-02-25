@@ -5,9 +5,8 @@ from datetime import datetime, timedelta
 
 
 # --- GLOBAL CONFIGURATION ---
-# Using Airflow Variables with defaults ensures code portability across environments (Dev/Prod)
-PROJECT_ID = os.getenv("AIRFLOW_VAR_GCP_PROJECT_ID", "data-platform-project-485710")
-DATASET_RAW = os.getenv("AIRFLOW_VAR_BQ_DATASET_RAW", "openaq_raw")
+PROJECT_ID = os.getenv("AIRFLOW_VAR_GCP_PROJECT_ID")
+DATASET_RAW = os.getenv("AIRFLOW_VAR_BQ_DATASET_RAW")
 
 
 # Listen for this Dataset to be updated
