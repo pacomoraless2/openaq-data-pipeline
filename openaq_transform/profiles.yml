@@ -4,9 +4,10 @@ openaq_transform:
     dev:
       type: bigquery
       method: service-account
-      project: data-platform-project-485710
-      dataset: openaq_raw
+      project: "{{ env_var('DBT_GCP_PROJECT') }}"
+      dataset: "{{ env_var('DBT_BQ_DATASET') }}"
       threads: 4
-      keyfile: /opt/airflow/keys/airflow-bq.json
-      location: europe-southwest1
+      keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
+      # Fallback to 'europe-southwest1' if the environment variable is not set
+      location: "{{ env_var('DBT_GCP_LOCATION') }}"
       priority: interactive

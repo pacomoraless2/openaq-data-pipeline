@@ -3,13 +3,14 @@ from airflow import DAG, Dataset
 from airflow.operators.bash import BashOperator
 from datetime import datetime, timedelta
 
+# --- ENVIRONMENT VARIABLES ---
+PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
+DATASET_RAW = os.environ["AIRFLOW_VAR_BQ_DATASET_RAW"]
+GCP_LOCATION = os.environ["AIRFLOW_VAR_GCP_LOCATION"]
+GCP_KEY_PATH = os.environ["AIRFLOW_VAR_GCP_KEY_PATH"]
 
-# --- GLOBAL CONFIGURATION ---
-PROJECT_ID = os.getenv("AIRFLOW_VAR_GCP_PROJECT_ID")
-DATASET_RAW = os.getenv("AIRFLOW_VAR_BQ_DATASET_RAW")
-
-
-# Listen for this Dataset to be updated
+# --- DATASET TRIGGERS ---
+# Listen for this Dataset to be updated by the ingestion DAG (01_openaq_ingestion)
 raw_measurements_dataset = Dataset(
     f"bigquery://{PROJECT_ID}/{DATASET_RAW}/raw_measurements"
 )
@@ -37,4 +38,11 @@ with DAG(
             "dbt deps && "
             "dbt build --profiles-dir ."
         ),
+        env={
+            "DBT_GCP_PROJECT": PROJECT_ID,
+            "DBT_BQ_DATASET": DATASET_RAW,
+            "DBT_GCP_LOCATION": GCP_LOCATION,
+            "GOOGLE_APPLICATION_CREDENTIALS": GCP_KEY_PATH,
+        },
+        append_env=True,
     )
