@@ -1,11 +1,19 @@
 import os
+import sys
 from airflow import DAG, Dataset
 from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import (
     GCSToBigQueryOperator,
 )
+from airflow.utils.trigger_rule import TriggerRule
 from datetime import datetime, timedelta
+
+# Append the scripts directory to the Python path so Airflow can import your modules
+sys.path.append("/opt/airflow/scripts")
+from extract_openaq_locations import extract_locations
+from extract_measurements import extract_measurements
 
 # --- ENVIRONMENT VARIABLES ---
 PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
@@ -71,22 +79,42 @@ with DAG(
     # PHASE 2: LOCATION DETAILS EXTRACTION
     # =========================================================================
 
-    extract_details_task = BashOperator(
+    extract_details_task = PythonOperator(
         task_id="extract_openaq_details",
-        bash_command=(
-            f"python /opt/airflow/scripts/extract_openaq_locations.py "
-            f"{{{{ run_id }}}} {{{{ ds }}}} "
-            f"{BUCKET_NAME} {BASE_DIR_CSV} {BASE_DIR_JSON_LOCS} '{{{{ conn.openaq_api.host }}}}'"
-        ),
-        env={"OPENAQ_API_KEY": "{{ conn.openaq_api.password }}"},
-        append_env=True,
+        python_callable=extract_locations,
+        op_kwargs={
+            "run_id": "{{ run_id }}",
+            "logical_date": "{{ ds }}",
+            "bucket_name": BUCKET_NAME,
+            "input_base_dir": BASE_DIR_CSV,
+            "output_base_dir": BASE_DIR_JSON_LOCS,
+            "api_url": "{{ conn.openaq_api.host }}",
+            "api_key": "{{ conn.openaq_api.password }}",
+        },
     )
+
+    def choose_location_branch(**kwargs):
+        """
+        Retrieves the processed record count from XComs.
+        If records exist, proceed to BigQuery load. Otherwise, skip it.
+        """
+        extracted_count = kwargs["ti"].xcom_pull(task_ids="extract_openaq_details")
+        if extracted_count and extracted_count > 0:
+            return "load_locations_to_bq"
+        return "skip_locations_load"
+
+    branch_locations_task = BranchPythonOperator(
+        task_id="branch_locations",
+        python_callable=choose_location_branch,
+    )
+
+    skip_locations_load = EmptyOperator(task_id="skip_locations_load")
 
     load_locations_to_bq = GCSToBigQueryOperator(
         task_id="load_locations_to_bq",
         bucket=BUCKET_NAME,
         source_objects=[
-            f"{BASE_DIR_JSON_LOCS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/locations_details_{{{{ run_id }}}}_*.ndjson"
+            f"{BASE_DIR_JSON_LOCS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/locations_details_{{{{ run_id }}}}_part*.ndjson"
         ],
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_locations",
         source_format="NEWLINE_DELIMITED_JSON",
@@ -109,22 +137,44 @@ with DAG(
     # PHASE 3: MEASUREMENTS EXTRACTION
     # =========================================================================
 
-    extract_measurements_task = BashOperator(
+    extract_measurements_task = PythonOperator(
         task_id="extract_openaq_measurements",
-        bash_command=(
-            f"python /opt/airflow/scripts/extract_measurements.py "
-            f"{{{{ run_id }}}} {{{{ ds }}}} "
-            f"{BUCKET_NAME} {BASE_DIR_JSON_LOCS} {BASE_DIR_JSON_MEAS} '{{{{ conn.openaq_api.host }}}}'"
-        ),
-        env={"OPENAQ_API_KEY": "{{ conn.openaq_api.password }}"},
-        append_env=True,
+        python_callable=extract_measurements,
+        op_kwargs={
+            "run_id": "{{ run_id }}",
+            "logical_date": "{{ ds }}",
+            "bucket_name": BUCKET_NAME,
+            "input_base_dir": BASE_DIR_JSON_LOCS,
+            "output_base_dir": BASE_DIR_JSON_MEAS,
+            "api_url": "{{ conn.openaq_api.host }}",
+            "api_key": "{{ conn.openaq_api.password }}",
+        },
+        # CRITICAL: Ensures this task runs even if the previous load was skipped
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     )
+
+    def choose_measurements_branch(**kwargs):
+        """
+        Retrieves the processed measurements count from XComs.
+        If measurements exist, proceed to BigQuery load. Otherwise, skip it.
+        """
+        extracted_count = kwargs["ti"].xcom_pull(task_ids="extract_openaq_measurements")
+        if extracted_count and extracted_count > 0:
+            return "load_measurements_to_bq"
+        return "skip_measurements_load"
+
+    branch_measurements_task = BranchPythonOperator(
+        task_id="branch_measurements",
+        python_callable=choose_measurements_branch,
+    )
+
+    skip_measurements_load = EmptyOperator(task_id="skip_measurements_load")
 
     load_raw_measurements_task = GCSToBigQueryOperator(
         task_id="load_measurements_to_bq",
         bucket=BUCKET_NAME,
         source_objects=[
-            f"{BASE_DIR_JSON_MEAS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/measurements_{{{{ run_id }}}}_*.ndjson"
+            f"{BASE_DIR_JSON_MEAS}/{{{{ execution_date.strftime('%Y/%m/%d') }}}}/measurements_{{{{ run_id }}}}_part*.ndjson"
         ],
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_measurements",
         source_format="NEWLINE_DELIMITED_JSON",
@@ -133,7 +183,8 @@ with DAG(
         ignore_unknown_values=True,
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
         cluster_fields=["_audit_sensor_id", "_audit_extracted_at"],
-        # Dataset trigger removed from here; moved to finalize_ingestion
+        # ONLY trigger downstream dbt models if this load actually runs
+        outlets=[raw_measurements_dataset],
         autodetect=False,
         schema_fields=[
             {"name": "data", "type": "JSON", "mode": "NULLABLE"},
@@ -146,25 +197,38 @@ with DAG(
     )
 
     # =========================================================================
-    # PHASE 4: FINAL CONVERGENCE POINT WITH THE DBT DATASET TRIGGER
+    # PHASE 4: FINAL CONVERGENCE POINT
     # =========================================================================
 
     finalize_ingestion = EmptyOperator(
-        task_id="finalize_ingestion", outlets=[raw_measurements_dataset]
+        task_id="finalize_ingestion",
+        # Outlets removed from here to prevent triggering dbt on skipped data loads
+        # We need this rule so the DAG succeeds even if some loads were skipped
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     )
 
     # =========================================================================
     # ORCHESTRATION
     # =========================================================================
 
-    # Extraction and load dependencies
     extract_ids_task >> [load_control_table, extract_details_task]
-    extract_details_task >> [load_locations_to_bq, extract_measurements_task]
-    extract_measurements_task >> load_raw_measurements_task
 
-    # Join pattern: Ensure all 3 BigQuery loads succeed before triggering dbt
+    # Branching logic for locations
+    extract_details_task >> branch_locations_task
+    branch_locations_task >> [load_locations_to_bq, skip_locations_load]
+
+    # Both location paths converge to extract measurements
+    [load_locations_to_bq, skip_locations_load] >> extract_measurements_task
+
+    # Branching logic for measurements
+    extract_measurements_task >> branch_measurements_task
+    branch_measurements_task >> [load_raw_measurements_task, skip_measurements_load]
+
+    # Final convergence point incorporates all possible endpoint tasks
     [
         load_control_table,
         load_locations_to_bq,
+        skip_locations_load,
         load_raw_measurements_task,
+        skip_measurements_load,
     ] >> finalize_ingestion

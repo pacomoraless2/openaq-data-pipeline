@@ -1,13 +1,13 @@
 """
 OpenAQ Data Extraction Pipeline
 
-This script reads a list of location IDs from a CSV stored in Google Cloud Storage (GCS),
-fetches the corresponding metadata from the OpenAQ API, appends audit fields,
-and uploads the consolidated data back to GCS as an NDJSON file.
+This script reads a list of location IDs from a GCS CSV,
+fetches the corresponding metadata from the OpenAQ API using persistent sessions,
+and uploads the consolidated data back to GCS as chunked NDJSON files.
 """
 
 import os
-import argparse
+import json
 import logging
 import requests
 import time
@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from gcs_utils import (
     cleanup_previous_run_files,
     upload_chunk_to_gcs,
-    create_empty_fallback_file,
 )
 
 logging.basicConfig(
@@ -37,16 +36,17 @@ def read_input_csv(bucket_name, object_path):
     return pd.read_csv(f"gs://{bucket_name}/{object_path}")
 
 
-def fetch_location_data(api_url, api_key, location_id):
+def fetch_location_data(session, api_url, location_id):
     """
-    Fetches details for a single location ID from the OpenAQ API.
+    Fetches details for a single location ID using a persistent HTTP session.
+    Implements a linear backoff strategy for transient network failures.
     """
     url = f"{api_url}/locations/{location_id}"
-    headers = {"X-API-Key": api_key} if api_key else {}
 
     for attempt in range(MAX_RETRIES):
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            # Reusing the TCP connection via session.get instead of requests.get
+            response = session.get(url, timeout=10)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -60,95 +60,81 @@ def fetch_location_data(api_url, api_key, location_id):
     return None
 
 
-def main(args):
-    api_key = os.environ.get("OPENAQ_API_KEY", "")
-
-    dt_obj = datetime.strptime(args.logical_date, "%Y-%m-%d")
+def extract_locations(
+    run_id, logical_date, bucket_name, input_base_dir, output_base_dir, api_url, api_key
+):
+    """
+    Callable orchestration logic designed for Airflow's PythonOperator.
+    Returns the total number of processed records to enable downstream branching.
+    """
+    dt_obj = datetime.strptime(logical_date, "%Y-%m-%d")
     date_path = f"{dt_obj.year}/{dt_obj.month:02d}/{dt_obj.day:02d}"
 
-    input_csv_path = f"{args.input_base_dir}/{date_path}/locations_{args.run_id}.csv"
-    run_output_prefix = (
-        f"{args.output_base_dir}/{date_path}/locations_details_{args.run_id}"
-    )
+    input_csv_path = f"{input_base_dir}/{date_path}/locations_{run_id}.csv"
+    run_output_prefix = f"{output_base_dir}/{date_path}/locations_details_{run_id}"
 
-    # Ensures idempotency
-    cleanup_previous_run_files(args.bucket_name, run_output_prefix)
+    # Use imported utility for idempotency
+    cleanup_previous_run_files(bucket_name, run_output_prefix)
 
-    df = read_input_csv(args.bucket_name, input_csv_path)
+    df = read_input_csv(bucket_name, input_csv_path)
     col_id = "id" if "id" in df.columns else df.columns[0]
     location_ids = df[col_id].unique()
 
     logger.info(f"Processing {len(location_ids)} unique locations.")
 
+    # Return 0 immediately if no locations to process (triggers skip in Airflow)
     if len(location_ids) == 0:
-        create_empty_fallback_file(
-            args.bucket_name, f"{run_output_prefix}_EMPTY.ndjson"
-        )
-        return
+        logger.warning("No locations found. Returning 0 to skip downstream loads.")
+        return 0
 
     buffer, chunk_size, file_counter, total_processed = [], 1000, 0, 0
     batch_ts = datetime.now(timezone.utc).isoformat()
 
-    for loc_id in location_ids:
-        raw_data = fetch_location_data(args.api_url, api_key, loc_id)
+    # Initialize a persistent HTTP session to avoid TCP/SSL handshake overhead per request
+    with requests.Session() as session:
+        if api_key:
+            session.headers.update({"X-API-Key": api_key})
 
-        if raw_data:
-            results = raw_data.get("results", [])
-            payload = (
-                results[0]
-                if isinstance(results, list) and results
-                else (results if isinstance(results, dict) else raw_data)
-            )
+        for loc_id in location_ids:
+            raw_data = fetch_location_data(session, api_url, loc_id)
 
-            output_full_path = f"{run_output_prefix}_part{file_counter}.ndjson"
+            if raw_data:
+                results = raw_data.get("results", [])
+                payload = (
+                    results[0]
+                    if isinstance(results, list) and results
+                    else (results if isinstance(results, dict) else raw_data)
+                )
 
-            buffer.append(
-                {
-                    "data": payload,
-                    "_audit_run_id": args.run_id,
-                    "_audit_logical_date": args.logical_date,
-                    "_audit_extracted_at": batch_ts,
-                    "_audit_source": "OpenAQ API",
-                    "_audit_gcs_filename": f"gs://{args.bucket_name}/{output_full_path}",
-                }
-            )
-            total_processed += 1
+                output_full_path = f"{run_output_prefix}_part{file_counter}.ndjson"
 
-        if len(buffer) >= chunk_size:
-            upload_chunk_to_gcs(args.bucket_name, output_full_path, buffer)
-            buffer, file_counter = [], file_counter + 1
+                buffer.append(
+                    {
+                        "data": payload,
+                        "_audit_run_id": run_id,
+                        "_audit_logical_date": logical_date,
+                        "_audit_extracted_at": batch_ts,
+                        "_audit_source": "OpenAQ API",
+                        "_audit_gcs_filename": f"gs://{bucket_name}/{output_full_path}",
+                    }
+                )
+                total_processed += 1
 
-        time.sleep(0.1)
+            if len(buffer) >= chunk_size:
+                upload_chunk_to_gcs(bucket_name, output_full_path, buffer)
+                buffer, file_counter = [], file_counter + 1
+
+            time.sleep(0.1)
 
     if buffer:
         output_full_path = f"{run_output_prefix}_part{file_counter}.ndjson"
         for r in buffer:
-            r["_audit_gcs_filename"] = f"gs://{args.bucket_name}/{output_full_path}"
-        upload_chunk_to_gcs(args.bucket_name, output_full_path, buffer)
+            r["_audit_gcs_filename"] = f"gs://{bucket_name}/{output_full_path}"
+        upload_chunk_to_gcs(bucket_name, output_full_path, buffer)
 
-    if total_processed == 0:
-        create_empty_fallback_file(
-            args.bucket_name, f"{run_output_prefix}_EMPTY.ndjson"
-        )
+    logger.info(
+        f"Extraction complete. Total valid locations processed: {total_processed}"
+    )
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Extract OpenAQ location details based on SSoT."
-    )
-    parser.add_argument(
-        "run_id", help="Unique identifier for the current pipeline run."
-    )
-    parser.add_argument(
-        "logical_date", help="Execution logical date in YYYY-MM-DD format."
-    )
-    parser.add_argument(
-        "bucket_name", help="GCS bucket name for both input and output."
-    )
-    parser.add_argument("input_base_dir", help="Base directory path for the input CSV.")
-    parser.add_argument(
-        "output_base_dir", help="Base directory path for the output NDJSON."
-    )
-    parser.add_argument("api_url", help="Base URL for the OpenAQ API.")
-    args = parser.parse_args()
-    main(args)
+    # Return the row count so Airflow XCom can capture it for BranchPythonOperator
+    return total_processed
