@@ -1,0 +1,59 @@
+version: 2
+
+models:
+  - name: int_sensors_enriched
+    description: "Silver layer view. Enriches sensor-level data with location metadata to provide full geographical context per sensor. Grain is one row per sensor per logical date."
+    columns:
+      - name: sensor_record_id
+        description: "Primary key. Unique identifier for the sensor at a specific logical date."
+        tests:
+          - unique
+          - not_null
+      - name: sensor_id
+        description: "Identifier for the specific sensor instrument."
+        tests:
+          - not_null
+          - is_non_negative
+      - name: parameter_name
+        description: "Name of the parameter being measured (e.g., pm25, temperature)."
+      - name: location_id
+        description: "Identifier for the physical monitoring station."
+        tests:
+          - not_null
+          - is_non_negative
+      - name: latitude
+        description: "Latitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -90
+              max_value: 90
+      - name: longitude
+        description: "Longitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -180
+              max_value: 180
+
+  - name: int_valid_measurements
+    description: "Silver layer view. Cleans raw measurements by standardizing timestamps, filtering out physical anomalies (e.g., out-of-bounds temperatures), and removing null values."
+    columns:
+      - name: sensor_id
+        description: "Identifier for the specific sensor instrument. Used to join with int_sensors_enriched."
+        tests:
+          - not_null
+          - is_non_negative
+      - name: parameter_id
+        description: "Numeric ID of the parameter being measured."
+        tests:
+          - not_null
+          - is_non_negative
+      - name: measurement_value
+        description: "The actual recorded value. Physically impossible values and nulls are filtered out in this model."
+        tests:
+          - not_null
+      - name: measured_from_utc
+        description: "Start time of the measurement interval in UTC."
+        tests:
+          - not_null
+      - name: measured_to_utc
+        description: "End time of the measurement interval in UTC."

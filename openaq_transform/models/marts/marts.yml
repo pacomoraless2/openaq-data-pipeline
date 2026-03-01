@@ -1,0 +1,187 @@
+version: 2
+
+models:
+  - name: mart_location_weather
+    description: "Gold layer fact table containing hourly aggregated weather and meteorological conditions per location. Timestamps are downsampled to the hour to ensure uniform granularity across different regions."
+    columns:
+      - name: weather_record_id
+        description: "Primary surrogate key. Deterministic hash of location_id and measurement_hour_utc."
+        tests:
+          - unique
+          - not_null
+      - name: location_id
+        description: "Unique identifier for the physical monitoring station."
+        tests:
+          - not_null
+      - name: measurement_hour_utc
+        description: "The truncated hour of the measurement in UTC. Serves as the standard time anchor and partition key."
+        tests:
+          - not_null
+      - name: temp_celsius
+        description: "Average hourly temperature in Celsius."
+        tests:
+          - is_between:
+              min_value: -80
+              max_value: 60
+      - name: temp_fahrenheit
+        description: "Average hourly temperature in Fahrenheit."
+        tests:
+          - is_between:
+              min_value: -112
+              max_value: 140
+      - name: humidity_pct
+        description: "Average hourly relative humidity percentage."
+        tests:
+          - is_between:
+              min_value: 0
+              max_value: 100
+      - name: wind_speed_ms
+        description: "Average hourly wind speed in meters per second."
+
+  - name: mart_location_air_quality
+    description: "Gold layer fact table containing hourly aggregated air quality pollutants (gases and particulate matter). Columns are explicitly named with their units to prevent analytical mismatch (e.g., mixing ppb and ug/m3)."
+    columns:
+      - name: air_quality_record_id
+        description: "Primary surrogate key. Deterministic hash of location_id and measurement_hour_utc."
+        tests:
+          - unique
+          - not_null
+      - name: location_id
+        description: "Unique identifier for the physical monitoring station."
+        tests:
+          - not_null
+      - name: location_name
+        description: "Name of the physical monitoring station."
+      - name: country_code
+        description: "Two-letter ISO country code."
+      - name: latitude
+        description: "Latitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -90
+              max_value: 90
+      - name: longitude
+        description: "Longitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -180
+              max_value: 180
+      - name: measurement_hour_utc
+        description: "The truncated hour of the measurement in UTC. Serves as the standard time anchor and partition key."
+        tests:
+          - not_null
+      - name: date_utc
+        description: "Date of the measurement in UTC."
+        tests:
+          - not_null
+      - name: year_utc
+        description: "Year of the measurement in UTC."
+        tests:
+          - not_null
+          - is_not_future_year
+      - name: month_utc
+        description: "Month of the measurement in UTC."
+        tests:
+          - not_null
+          - is_between:
+              min_value: 1
+              max_value: 12
+      - name: day_utc
+        description: "Day of the month of the measurement in UTC."
+        tests:
+          - not_null
+          - is_between:
+              min_value: 1
+              max_value: 31
+      - name: hour_utc
+        description: "Hour of the day of the measurement in UTC (0-23)."
+        tests:
+          - not_null
+          - is_between:
+              min_value: 0
+              max_value: 23
+      - name: pm10_ugm3
+        description: "Average hourly PM10 (Particulate Matter < 10 micrometers) concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: pm25_ugm3
+        description: "Average hourly PM2.5 (Particulate Matter < 2.5 micrometers) concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: pm1_ugm3
+        description: "Average hourly PM1 (Particulate Matter < 1 micrometer) concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: um003_particles_cm3
+        description: "Average hourly ultrafine particles (0.3 micrometers) concentration in particles per cubic centimeter."
+        tests:
+          - is_non_negative
+      - name: o3_ugm3
+        description: "Average hourly Ozone concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: co_ugm3
+        description: "Average hourly Carbon Monoxide concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: co_ppb
+        description: "Average hourly Carbon Monoxide concentration in parts per billion."
+        tests:
+          - is_non_negative
+      - name: no2_ugm3
+        description: "Average hourly Nitrogen Dioxide concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: no2_ppb
+        description: "Average hourly Nitrogen Dioxide concentration in parts per billion."
+        tests:
+          - is_non_negative
+      - name: so2_ugm3
+        description: "Average hourly Sulfur Dioxide concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+      - name: so2_ppb
+        description: "Average hourly Sulfur Dioxide concentration in parts per billion."
+        tests:
+          - is_non_negative
+      - name: nox_ppb
+        description: "Average hourly Nitrogen Oxides concentration in parts per billion."
+        tests:
+          - is_non_negative
+      - name: no_ppb
+        description: "Average hourly Nitric Oxide concentration in parts per billion."
+        tests:
+          - is_non_negative
+      - name: no_ugm3
+        description: "Average hourly Nitric Oxide concentration in micrograms per cubic meter."
+        tests:
+          - is_non_negative
+
+  - name: dim_locations
+    description: "Gold layer dimension table for monitoring locations. Acts as the Single Source of Truth (SSOT) for geographical metadata."
+    columns:
+      - name: location_id
+        description: "Primary key. Unique identifier for the physical monitoring station."
+        tests:
+          - unique
+          - not_null
+      - name: location_name
+        description: "Name of the physical monitoring station."
+      - name: country_code
+        description: "Two-letter ISO country code."
+      - name: country_name
+        description: "Full name of the country."
+      - name: latitude
+        description: "Latitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -90
+              max_value: 90
+      - name: longitude
+        description: "Longitude coordinate of the station."
+        tests:
+          - is_between:
+              min_value: -180
+              max_value: 180
+      - name: last_updated_utc
+        description: "Timestamp when this dimension was last updated in the data warehouse."

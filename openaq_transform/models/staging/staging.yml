@@ -13,6 +13,7 @@ models:
         description: "Natural identifier for the location."
         tests:
           - not_null
+          - is_non_negative
       - name: latitude
         description: "Latitude coordinate of the station."
         tests:
@@ -40,10 +41,12 @@ models:
         description: "ID of the sensor associated with the measurement."
         tests:
           - not_null
+          - is_non_negative
       - name: parameter_id
         description: "ID of the measured parameter (e.g., PM2.5, Humidity). Kept in fact table for robust joins and fast filtering."
         tests:
           - not_null
+          - is_non_negative
       - name: measurement_value
         description: "Numeric value of the recorded measurement."
         tests:
@@ -61,11 +64,14 @@ models:
         description: "ID of the parent location where the sensor is installed."
         tests:
           - not_null
+          - is_non_negative
       - name: sensor_id
         description: "Natural identifier for the sensor."
         tests:
           - not_null
+          - is_non_negative
       - name: parameter_id
         description: "ID of the measured parameter."
         tests:
           - not_null
+          - is_non_negative
