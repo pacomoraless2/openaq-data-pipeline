@@ -66,8 +66,8 @@ def get_sensor_ids_from_locations_json(bucket_name, input_prefix, run_id):
 def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
     """
     Retrieves time-series measurements for a specific sensor within a time window.
-    Implements robust pagination with exponential backoff for transient errors
-    and fails loudly to prevent silent data loss.
+    Implements robust pagination with exponential backoff for transient errors,
+    fails loudly to prevent silent data loss, and safely parses the JSON payload.
     """
     url = f"{api_url}/sensors/{sensor_id}/measurements"
     params = {
@@ -97,13 +97,24 @@ def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
                 response.raise_for_status()
 
                 results = response.json().get("results", [])
+
                 for res in results:
-                    try:
-                        unique_key = f"{res.get('period', {}).get('datetimeFrom', {}).get('utc')}-{res.get('value')}"
-                        if unique_key not in seen_measurement_ids:
-                            seen_measurement_ids.add(unique_key)
-                            all_measurements.append(res)
-                    except Exception:
+                    # Guard clause: ensure 'res' is actually a dictionary
+                    if not isinstance(res, dict):
+                        logger.warning(
+                            f"Unexpected record format received, skipping: {res}"
+                        )
+                        continue
+
+                    # Safe traversal: use 'or {}' to prevent AttributeError if an intermediate key is None
+                    period = res.get("period") or {}
+                    dt_from = period.get("datetimeFrom") or {}
+                    utc_time = dt_from.get("utc")
+                    value = res.get("value")
+
+                    unique_key = f"{utc_time}-{value}"
+                    if unique_key not in seen_measurement_ids:
+                        seen_measurement_ids.add(unique_key)
                         all_measurements.append(res)
 
                 page_success = True

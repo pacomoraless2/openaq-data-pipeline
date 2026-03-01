@@ -1,7 +1,6 @@
 import os
 import sys
 from airflow import DAG, Dataset
-from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import (
@@ -12,6 +11,7 @@ from datetime import datetime, timedelta
 
 # Append the scripts directory to the Python path so Airflow can import your modules
 sys.path.append("/opt/airflow/scripts")
+from extract_sheets_to_gcs import extract_locations_data
 from extract_openaq_locations import extract_locations
 from extract_measurements import extract_measurements
 
@@ -50,13 +50,17 @@ with DAG(
     # PHASE 1: PARAMETER INGESTION
     # =========================================================================
 
-    extract_ids_task = BashOperator(
+    extract_ids_task = PythonOperator(
         task_id="extract_sheets_to_gcs",
-        bash_command=(
-            f"python /opt/airflow/scripts/extract_sheets_to_gcs.py "
-            f"{{{{ run_id }}}} {{{{ ds }}}} "
-            f"{SPREADSHEET_ID} '{SHEET_RANGE}' {BUCKET_NAME} {BASE_DIR_CSV}"
-        ),
+        python_callable=extract_locations_data,
+        op_kwargs={
+            "run_id": "{{ run_id }}",
+            "logical_date_str": "{{ ds }}",
+            "spreadsheet_id": SPREADSHEET_ID,
+            "sheet_range": SHEET_RANGE,
+            "bucket_name": BUCKET_NAME,
+            "base_dir": BASE_DIR_CSV,
+        },
     )
 
     load_control_table = GCSToBigQueryOperator(
@@ -148,7 +152,6 @@ with DAG(
             "api_url": "{{ conn.openaq_api.host }}",
             "api_key": "{{ conn.openaq_api.password }}",
         },
-        # REMOVED: trigger_rule so it strictly requires location load success
     )
 
     def choose_measurements_branch(**kwargs):
