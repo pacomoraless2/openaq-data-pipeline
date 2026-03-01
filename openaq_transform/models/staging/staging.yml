@@ -15,8 +15,18 @@ models:
           - not_null
       - name: latitude
         description: "Latitude coordinate of the station."
+        tests:
+          - not_null
+          - is_between:
+              min_value: -90
+              max_value: 90
       - name: longitude
         description: "Longitude coordinate of the station."
+        tests:
+          - not_null
+          - is_between:
+              min_value: -180
+              max_value: 180
 
   - name: stg_openaq__measurements
     description: "Silver layer containing air quality measurement facts."
