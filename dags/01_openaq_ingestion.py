@@ -27,10 +27,9 @@ BASE_DIR_CSV = os.environ["AIRFLOW_VAR_LOCATIONS_BASE_PATH"]
 BASE_DIR_JSON_LOCS = os.environ["AIRFLOW_VAR_LOCATIONS_JSON_PATH"]
 BASE_DIR_JSON_MEAS = os.environ["AIRFLOW_VAR_MEASUREMENTS_JSON_PATH"]
 
-# --- DATASET ---
-raw_measurements_dataset = Dataset(
-    f"bigquery://{PROJECT_ID}/{DATASET_RAW}/raw_measurements"
-)
+# --- DATASETS ---
+# Unified dataset representing the Bronze layer is fully updated and ready
+bronze_ready_dataset = Dataset(f"bigquery://{PROJECT_ID}/{DATASET_RAW}/bronze_ready")
 
 default_args = {
     "owner": "data_engineering",
@@ -149,8 +148,7 @@ with DAG(
             "api_url": "{{ conn.openaq_api.host }}",
             "api_key": "{{ conn.openaq_api.password }}",
         },
-        # CRITICAL: Ensures this task runs even if the previous load was skipped
-        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
+        # REMOVED: trigger_rule so it strictly requires location load success
     )
 
     def choose_measurements_branch(**kwargs):
@@ -183,8 +181,6 @@ with DAG(
         ignore_unknown_values=True,
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
         cluster_fields=["_audit_sensor_id", "_audit_extracted_at"],
-        # ONLY trigger downstream dbt models if this load actually runs
-        outlets=[raw_measurements_dataset],
         autodetect=False,
         schema_fields=[
             {"name": "data", "type": "JSON", "mode": "NULLABLE"},
@@ -197,15 +193,34 @@ with DAG(
     )
 
     # =========================================================================
-    # PHASE 4: FINAL CONVERGENCE POINT
+    # PHASE 4: DATA EVALUATION & TRIGGER
     # =========================================================================
 
-    finalize_ingestion = EmptyOperator(
-        task_id="finalize_ingestion",
-        # Outlets removed from here to prevent triggering dbt on skipped data loads
-        # We need this rule so the DAG succeeds even if some loads were skipped
+    def evaluate_bronze_updates(**kwargs):
+        """
+        Evaluates if ANY data was extracted during the DAG run by checking XComs.
+        If either locations or measurements were updated, we emit the dataset
+        to trigger downstream dbt models.
+        """
+        loc_count = kwargs["ti"].xcom_pull(task_ids="extract_openaq_details") or 0
+        meas_count = kwargs["ti"].xcom_pull(task_ids="extract_openaq_measurements") or 0
+
+        if loc_count > 0 or meas_count > 0:
+            return "emit_dataset_trigger"
+        return "skip_dataset_trigger"
+
+    eval_data_updates = BranchPythonOperator(
+        task_id="eval_data_updates",
+        python_callable=evaluate_bronze_updates,
         trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     )
+
+    emit_dataset_trigger = EmptyOperator(
+        task_id="emit_dataset_trigger",
+        outlets=[bronze_ready_dataset],
+    )
+
+    skip_dataset_trigger = EmptyOperator(task_id="skip_dataset_trigger")
 
     # =========================================================================
     # ORCHESTRATION
@@ -217,18 +232,21 @@ with DAG(
     extract_details_task >> branch_locations_task
     branch_locations_task >> [load_locations_to_bq, skip_locations_load]
 
-    # Both location paths converge to extract measurements
-    [load_locations_to_bq, skip_locations_load] >> extract_measurements_task
+    # CRITICAL CHANGE: Measurements ONLY run if locations were successfully loaded
+    load_locations_to_bq >> extract_measurements_task
 
     # Branching logic for measurements
     extract_measurements_task >> branch_measurements_task
     branch_measurements_task >> [load_raw_measurements_task, skip_measurements_load]
 
-    # Final convergence point incorporates all possible endpoint tasks
+    # Final evaluation. It will run successfully if ANY of these paths completes.
+    # If skip_locations_load runs, the measurement tasks are automatically skipped,
+    # but eval_data_updates still runs to close the DAG cleanly.
     [
         load_control_table,
-        load_locations_to_bq,
-        skip_locations_load,
+        skip_locations_load,  # Direct path to the end if locations are skipped
         load_raw_measurements_task,
         skip_measurements_load,
-    ] >> finalize_ingestion
+    ] >> eval_data_updates
+
+    eval_data_updates >> [emit_dataset_trigger, skip_dataset_trigger]

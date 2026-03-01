@@ -71,23 +71,30 @@ def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
     and fails loudly to prevent silent data loss.
     """
     url = f"{api_url}/sensors/{sensor_id}/measurements"
-    params = {"limit": 1000, "page": 1, "datetime_from": date_from, "datetime_to": date_to}
-    
+    params = {
+        "limit": 1000,
+        "page": 1,
+        "datetime_from": date_from,
+        "datetime_to": date_to,
+    }
+
     all_measurements = []
     seen_measurement_ids = set()
     max_retries = 3
 
     while True:
         page_success = False
-        
+
         # 1. Micro-retries for individual page failures
         for attempt in range(max_retries):
             try:
                 response = session.get(url, params=params, timeout=15)
-                
+
                 if response.status_code == 404:
-                    return all_measurements  # 404 naturally means no data for this sensor
-                
+                    return (
+                        all_measurements  # 404 naturally means no data for this sensor
+                    )
+
                 response.raise_for_status()
 
                 results = response.json().get("results", [])
@@ -108,11 +115,13 @@ def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
                     f"Network error on sensor {sensor_id}, page {params['page']} "
                     f"(Attempt {attempt + 1}/{max_retries}): {e}"
                 )
-                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                time.sleep(2**attempt)  # Exponential backoff: 1s, 2s, 4s
 
         # 2. Fail Loudly: If all retries for this page failed, CRASH the script
         if not page_success:
-            logger.error(f"FATAL: Exhausted retries for sensor {sensor_id}, page {params['page']}.")
+            logger.error(
+                f"FATAL: Exhausted retries for sensor {sensor_id}, page {params['page']}."
+            )
             raise RuntimeError(
                 f"Incomplete data extraction for sensor {sensor_id}. "
                 f"Failing task to trigger Airflow retry and prevent silent data loss."
@@ -121,7 +130,7 @@ def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
         # If page succeeded but returned less than limit, we reached the end
         if len(results) < params["limit"]:
             break
-            
+
         params["page"] += 1
         time.sleep(0.1)
 

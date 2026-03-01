@@ -10,10 +10,8 @@ GCP_LOCATION = os.environ["AIRFLOW_VAR_GCP_LOCATION"]
 GCP_KEY_PATH = os.environ["AIRFLOW_VAR_GCP_KEY_PATH"]
 
 # --- DATASET TRIGGERS ---
-# Listen for this Dataset to be updated by the ingestion DAG (01_openaq_ingestion)
-raw_measurements_dataset = Dataset(
-    f"bigquery://{PROJECT_ID}/{DATASET_RAW}/raw_measurements"
-)
+# Unified dataset representing the Bronze layer is fully updated and ready
+bronze_ready_dataset = Dataset(f"bigquery://{PROJECT_ID}/{DATASET_RAW}/bronze_ready")
 
 default_args = {
     "owner": "data_engineering",
@@ -25,7 +23,8 @@ with DAG(
     dag_id="02_openaq_transformation",
     default_args=default_args,
     start_date=datetime(2023, 1, 1),
-    schedule=[raw_measurements_dataset],  # DATA-AWARE SCHEDULING
+    # Trigger DAG only when the ingestion DAG signals it is completely done
+    schedule=[bronze_ready_dataset],
     catchup=False,
     tags=["elt", "transformation", "silver", "dbt"],
 ) as dag:
