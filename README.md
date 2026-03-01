@@ -1,6 +1,8 @@
-## OpenAQ Data Pipeline (ELT)
 
-A modern, containerized, and scalable data pipeline designed to ingest, store, and transform real-time air quality data from the OpenAQ API.
+
+# OpenAQ Data Pipeline: Global Air Quality ELT 
+
+A modern, containerized, and scalable data pipeline designed to ingest, store, and transform real-time air quality data from the OpenAQ API into an analytics-ready Data Warehouse.
 
 ![Python](https://img.shields.io/badge/python-3.9-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Airflow](https://img.shields.io/badge/airflow-2.9-red?style=for-the-badge&logo=apache-airflow&logoColor=white)
@@ -8,9 +10,12 @@ A modern, containerized, and scalable data pipeline designed to ingest, store, a
 ![Docker](https://img.shields.io/badge/docker--compose-blue?style=for-the-badge&logo=docker&logoColor=white)
 ![GCP](https://img.shields.io/badge/GCP-BigQuery%20%7C%20GCS-yellow?style=for-the-badge&logo=google-cloud&logoColor=white)
 
-## Architecture
+##  Project Overview
+This project extracts raw meteorological and pollutant data from global monitoring stations, securely stages it in a Data Lake, and applies rigorous dimensional modeling and quality testing to serve business-critical datasets. It is built with a focus on **idempotency, FinOps, and strict data quality constraints**.
 
-This project follows a decoupled **ELT (Extract, Load, Transform)** architecture pattern:
+##  Architecture (Medallion Pattern)
+
+This pipeline implements a decoupled **ELT (Extract, Load, Transform)** architecture following the Medallion Data Design principles.
 
 ```mermaid
 graph LR
@@ -30,14 +35,18 @@ graph LR
         subgraph "BigQuery (dbt)"
             direction TB
             
-            %% Bronze Layer (Source)
+            %% Bronze Layer
             raw("Bronze Layer (Raw Ingestion)")
             
-            %% Silver Layer (Transformation)
-            staging("Silver Layer (Staging / Clean)")
+            %% Silver Layer (Split into Staging and Intermediate)
+            subgraph "Silver Layer (Transformation)"
+                direction LR
+                staging("Staging (Clean & Cast)")
+                inter("Intermediate (Enrich & Join)")
+            end
             
-            %% Gold Layer (Serving)
-            marts("Gold Layer (Marts / Business)")
+            %% Gold Layer
+            marts("Gold Layer (Marts / Serving)")
         end
     end
 
@@ -47,7 +56,8 @@ graph LR
     
     ingest -->|Load NDJSON| raw
     raw -->|dbt source & test| staging
-    staging -->|dbt model & test| marts
+    staging -->|dbt model & test| inter
+    inter -->|dbt model & test| marts
     marts -->|Connect| bi
 
     %% --- STYLES ---
@@ -63,72 +73,89 @@ graph LR
     class source1,source2,bi external;
     class ingest storage;
     class raw bronze;
-    class staging silver;
+    class staging,inter silver;
     class marts gold;
 ```
 
-## Key Features (Engineering Highlights)
+##  Engineering Highlights
 
-Idempotency & Replayability: The pipeline is fully idempotent. It uses logical partitioning (logical_date) and deduplication strategies to ensure safe backfills and historical re-runs without data duplication.
+-   **Data-Aware Orchestration:** Replaced rigid time-based triggers with Airflow Datasets (`schedule=[bronze_ready_dataset]`). The dbt transformation DAG automatically executes only when upstream data extraction is confirmed, decoupling dependencies.
+    
+-   **Dimensional Modeling (Star Schema):** Transformed raw API JSONs into a robust Star Schema consisting of a Conformed Dimension (`dim_locations`) and ultra-fast Fact tables (`mart_location_air_quality`, `mart_location_weather`).
+    
+-   **Advanced Data Quality (DataOps):** Implemented custom generic Jinja macros in dbt to enforce physical laws on data (e.g., rejecting negative atmospheric particle concentrations or out-of-bounds thermodynamic temperatures) ensuring high-fidelity analytics.
+    
+-   **Idempotency & Surrogate Keys:** The pipeline is fully replayable. It utilizes deterministic MD5 hashing for Surrogate Keys and logical date partitioning to guarantee safe backfills without data duplication.
+    
+-   **FinOps & BigQuery Optimization:** Designed with a composite physical layout combining partitioning by logical date (for cost-effective backfills) and clustering by geographical attributes to minimize bytes processed during BI queries.
+    
+-   **Schema Evolution Resilience:** Leverages BigQuery's native `JSON` data type for the Bronze layer ingestion, creating a defense against upstream API schema drift without breaking the ingestion DAGs.
+    
 
-Schema Evolution Handling: Leverages BigQuery's JSON data type for raw ingestion, allowing the pipeline to be resilient to upstream API schema changes (schema drift) without breaking the ingestion layer.
+##  Tech Stack
 
-Robust Partitioning Strategy: Implements a composite strategy: Partitioning by Logical Date (for efficient backfills and cost management) + Clustering by Ingestion Timestamp (for fast "latest state" retrieval).
+-   **Orchestration:** Apache Airflow 2.9 (Dockerized).
+    
+-   **Ingestion:** Python (Requests, Pandas, Google Cloud SDK).
+    
+-   **Data Lake:** Google Cloud Storage (Hive-partitioned NDJSON).
+    
+-   **Data Warehouse:** Google BigQuery.
+    
+-   **Transformation:** dbt core.
+    
+-   **Version Control:** Git & GitHub.
+    
 
-Data Quality (DataOps): Integrated dbt tests (schema, referential integrity, and custom business logic) ensure that only high-quality data reaches the production marts.
+##  Project Structure
 
-Infrastructure as Code: Local development environment is fully containerized using Docker Compose, mirroring production services.
 
-## Tech Stack
-
-Orchestration: Apache Airflow (running on Docker).
-
-Ingestion: Python (Requests, Pandas, Google Cloud SDK).
-
-Data Lake: Google Cloud Storage (NDJSON format, hive-partitioned).
-
-Data Warehouse: Google BigQuery.
-
-Transformation: dbt (data build tool) Core.
-
-Version Control: Git & GitHub.
-
-## Project Structure
-
-```Bash
+```
 .
-├── dags/                   # Airflow DAGs (Ingestion & Transformation triggers)
-├── scripts/                # Python Extraction Logic (Pure ETL scripts)
-├── openaq_transform/       # dbt Project (SQL Models, Tests, Seeds)
+├── dags/                   # Airflow DAGs (Data-Aware scheduling)
+├── scripts/                # Python Extraction Logic (Pure ETL components)
+├── openaq_transform/       # dbt Project (Models, Custom Macros, Tests, Catalog)
 ├── docker-compose.yaml     # Local Infrastructure Definition
 └── README.md               # Documentation
+
 ```
 
-## Quick Start
+##  Quick Start
 
-Clone the repository:
+**1. Clone the repository:**
 
-```Bash
+
+
+```
 git clone [https://github.com/pacomoraless2/openaq-data-pipeline.git](https://github.com/pacomoraless2/openaq-data-pipeline.git)
 cd openaq-data-pipeline
+
 ```
 
-Configure Credentials:
+**2. Configure Credentials:**
 
-Place your GCP Service Account key at config/google_credentials.json.
+-   Place your GCP Service Account JSON key at `config/google_credentials.json`.
+    
+-   Set up your required environment variables in the `.env` file (see `.env.example`).
+    
 
-Set up environment variables in .env.
+**3. Launch Infrastructure:**
 
-Launch Infrastructure:
 
-```Bash
+```
 docker-compose up -d
+
 ```
 
-Access Airflow UI:
+**4. Access Airflow UI:**
 
-URL: <http://localhost:8080>
+-   **URL:** http://localhost:8080
+    
+-   **Credentials:** `airflow` / `airflow`
+    
+-   Unpause the `01_openaq_ingestion` DAG to kick off the pipeline!
+    
 
-Credentials: airflow / airflow
+----------
 
-Developed by Paco Morales
+_Developed by Paco Morales._
