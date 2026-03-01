@@ -66,46 +66,64 @@ def get_sensor_ids_from_locations_json(bucket_name, input_prefix, run_id):
 
 def fetch_measurements(session, api_url, sensor_id, date_from, date_to):
     """
-    Retrieves time-series measurements for a specific sensor within a time window
-    using a persistent HTTP session to minimize network latency.
+    Retrieves time-series measurements for a specific sensor within a time window.
+    Implements robust pagination with exponential backoff for transient errors
+    and fails loudly to prevent silent data loss.
     """
     url = f"{api_url}/sensors/{sensor_id}/measurements"
-    params = {
-        "limit": 1000,
-        "page": 1,
-        "datetime_from": date_from,
-        "datetime_to": date_to,
-    }
-
+    params = {"limit": 1000, "page": 1, "datetime_from": date_from, "datetime_to": date_to}
+    
     all_measurements = []
     seen_measurement_ids = set()
+    max_retries = 3
 
     while True:
-        try:
-            # Reusing the TCP connection via session.get instead of requests.get
-            response = session.get(url, params=params, timeout=15)
-            if response.status_code == 404:
-                return []
-            response.raise_for_status()
+        page_success = False
+        
+        # 1. Micro-retries for individual page failures
+        for attempt in range(max_retries):
+            try:
+                response = session.get(url, params=params, timeout=15)
+                
+                if response.status_code == 404:
+                    return all_measurements  # 404 naturally means no data for this sensor
+                
+                response.raise_for_status()
 
-            results = response.json().get("results", [])
-            for res in results:
-                try:
-                    unique_key = f"{res.get('period', {}).get('datetimeFrom', {}).get('utc')}-{res.get('value')}"
-                    if unique_key not in seen_measurement_ids:
-                        seen_measurement_ids.add(unique_key)
+                results = response.json().get("results", [])
+                for res in results:
+                    try:
+                        unique_key = f"{res.get('period', {}).get('datetimeFrom', {}).get('utc')}-{res.get('value')}"
+                        if unique_key not in seen_measurement_ids:
+                            seen_measurement_ids.add(unique_key)
+                            all_measurements.append(res)
+                    except Exception:
                         all_measurements.append(res)
-                except Exception:
-                    all_measurements.append(res)
 
-            if len(results) < params["limit"]:
-                break
-            params["page"] += 1
-            time.sleep(0.1)
+                page_success = True
+                break  # Page fetched successfully, break the retry loop
 
-        except Exception as e:
-            logger.error(f"Error extracting sensor {sensor_id}: {e}")
+            except requests.exceptions.RequestException as e:
+                logger.warning(
+                    f"Network error on sensor {sensor_id}, page {params['page']} "
+                    f"(Attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+
+        # 2. Fail Loudly: If all retries for this page failed, CRASH the script
+        if not page_success:
+            logger.error(f"FATAL: Exhausted retries for sensor {sensor_id}, page {params['page']}.")
+            raise RuntimeError(
+                f"Incomplete data extraction for sensor {sensor_id}. "
+                f"Failing task to trigger Airflow retry and prevent silent data loss."
+            )
+
+        # If page succeeded but returned less than limit, we reached the end
+        if len(results) < params["limit"]:
             break
+            
+        params["page"] += 1
+        time.sleep(0.1)
 
     return all_measurements
 
