@@ -77,17 +77,6 @@ def upload_string_to_gcs(bucket_name, object_path, content, content_type="text/p
     logger.info(f"Successfully uploaded to: gs://{bucket_name}/{object_path}")
 
 
-def create_empty_fallback_file(bucket_name, object_path):
-    """
-    Creates an empty NDJSON file in GCS to satisfy downstream pipeline dependencies
-    when no valid payloads are extracted.
-    """
-    client = get_gcs_client()
-    blob = client.bucket(bucket_name).blob(object_path)
-    blob.upload_from_string("", content_type="application/x-ndjson")
-    logger.warning(f"Generated empty fallback file: gs://{bucket_name}/{object_path}")
-
-
 def get_partition_path(logical_date_str):
     """
     Standardizes the conversion of a logical date string (YYYY-MM-DD)
