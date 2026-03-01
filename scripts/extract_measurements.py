@@ -6,7 +6,6 @@ fetches historical measurements (time-series data) for those sensors from the Op
 using persistent HTTP sessions, and streams the results back to GCS in chunked NDJSON files.
 """
 
-import os
 import json
 import logging
 import requests

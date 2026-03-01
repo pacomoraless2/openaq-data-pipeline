@@ -6,8 +6,6 @@ fetches the corresponding metadata from the OpenAQ API using persistent sessions
 and uploads the consolidated data back to GCS as chunked NDJSON files.
 """
 
-import os
-import json
 import logging
 import requests
 import time
@@ -39,7 +37,8 @@ def read_input_csv(bucket_name, object_path):
 def fetch_location_data(session, api_url, location_id):
     """
     Fetches details for a single location ID using a persistent HTTP session.
-    Implements a linear backoff strategy for transient network failures.
+    Implements a linear backoff strategy for transient network failures
+    and fails loudly to prevent silent data loss.
     """
     url = f"{api_url}/locations/{location_id}"
 
@@ -47,17 +46,27 @@ def fetch_location_data(session, api_url, location_id):
         try:
             # Reusing the TCP connection via session.get instead of requests.get
             response = session.get(url, timeout=10)
+
+            # A 404 is a valid business case (location doesn't exist), safe to return None
             if response.status_code == 404:
                 return None
+
             response.raise_for_status()
             return response.json()
+
         except requests.exceptions.RequestException as e:
             logger.warning(
                 f"Error fetching ID {location_id} (Attempt {attempt+1}/{MAX_RETRIES}): {e}"
             )
-            time.sleep(1 * (attempt + 1))
+            # If we reached the last attempt, crash the script to avoid data loss
+            if attempt == MAX_RETRIES - 1:
+                logger.error(f"FATAL: Exhausted retries for location {location_id}.")
+                raise RuntimeError(
+                    f"Failed to fetch location {location_id} after {MAX_RETRIES} attempts. "
+                    f"Failing task to trigger Airflow retry and prevent silent data loss."
+                ) from e
 
-    return None
+            time.sleep(1 * (attempt + 1))
 
 
 def extract_locations(
