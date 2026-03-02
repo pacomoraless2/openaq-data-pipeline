@@ -1,5 +1,6 @@
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='weather_record_id',
     partition_by={
       "field": "measurement_hour_utc",
       "data_type": "timestamp",
@@ -11,6 +12,11 @@
 
 WITH measurements AS (
     SELECT * FROM {{ ref('int_valid_measurements') }}
+    
+    {% if is_incremental() %}
+        -- Process only new or late-arriving measurements based on the latest hourly boundary
+        WHERE measured_from_utc >= (SELECT MAX(measurement_hour_utc) FROM {{ this }})
+    {% endif %}
 ),
 
 sensors_enriched AS (

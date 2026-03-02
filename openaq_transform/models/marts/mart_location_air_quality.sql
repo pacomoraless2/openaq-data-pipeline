@@ -1,5 +1,6 @@
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    unique_key='air_quality_record_id',
     partition_by={
       "field": "measurement_hour_utc",
       "data_type": "timestamp",
@@ -11,6 +12,11 @@
 
 WITH measurements AS (
     SELECT * FROM {{ ref('int_valid_measurements') }}
+    
+    {% if is_incremental() %}
+        -- Process only new or late-arriving measurements based on the latest hourly boundary
+        WHERE measured_from_utc >= (SELECT MAX(measurement_hour_utc) FROM {{ this }})
+    {% endif %}
 ),
 
 sensors_enriched AS (
@@ -38,9 +44,9 @@ joined_data AS (
 ),
 
 /* 2. Pivoting & Calendar Extraction for Air Quality:
-  Transform to a wide fact table. 
+  Transform to a wide fact table.
   Column names include their unit of measurement 
-  OpenAQ tracks the same pollutant in multiple units (e.g., µg/m³ vs ppb).
+  OpenAQ tracks the same pollutant in multiple units
 */
 air_quality_pivot AS (
     SELECT
