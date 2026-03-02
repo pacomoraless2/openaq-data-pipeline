@@ -45,8 +45,8 @@ joined_data AS (
 air_quality_pivot AS (
     SELECT
         -- Surrogate Key
-        TO_HEX(MD5(CONCAT(CAST(location_id AS STRING), '-', CAST(measurement_hour_utc AS STRING)))) AS air_quality_record_id,
-
+        {{ dbt_utils.generate_surrogate_key(['location_id', 'measurement_hour_utc']) }} AS air_quality_record_id,
+        
         location_id,
         location_name,
         country_code,

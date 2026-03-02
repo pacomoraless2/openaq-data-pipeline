@@ -44,8 +44,8 @@ joined_data AS (
 weather_pivot AS (
     SELECT
         -- Surrogate Key
-        TO_HEX(MD5(CONCAT(CAST(location_id AS STRING), '-', CAST(measurement_hour_utc AS STRING)))) AS weather_record_id,
-
+        {{ dbt_utils.generate_surrogate_key(['location_id', 'measurement_hour_utc']) }} AS weather_record_id,
+        
         location_id,
         location_name,
         country_code,
