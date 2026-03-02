@@ -8,12 +8,12 @@ WITH sensors_enriched AS (
     SELECT * FROM {{ ref('int_sensors_enriched') }}
 ),
 
-/* Deduplication: 
-  Extract strictly unique location metadata to form a true Dimension table.
-  This removes the sensor-level grain from the intermediate model.
+/* Slowly Changing Dimension (SCD Type 1) logic: 
+   Extract the most recent snapshot for each location to form a true Dimension table.
+   This removes the sensor-level grain and prevents row explosion if metadata changes.
 */
-unique_locations AS (
-    SELECT DISTINCT
+latest_locations AS (
+    SELECT
         location_id,
         location_name,
         country_code,
@@ -22,9 +22,10 @@ unique_locations AS (
         longitude
     FROM sensors_enriched
     WHERE location_id IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY location_id ORDER BY logical_date DESC) = 1
 )
 
 SELECT 
     *,
     CURRENT_TIMESTAMP() AS last_updated_utc 
-FROM unique_locations
+FROM latest_locations
