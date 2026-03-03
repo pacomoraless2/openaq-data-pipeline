@@ -209,7 +209,7 @@ def extract_measurements(
                 upload_chunk_to_gcs(bucket_name, output_path, buffer)
                 buffer, file_counter = [], file_counter + 1
 
-            time.sleep(0.05)
+            time.sleep(0.1)
 
     # Upload any remaining records in the buffer
     if buffer:

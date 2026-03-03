@@ -39,10 +39,11 @@ default_args = {
 
 with DAG(
     dag_id="01_openaq_ingestion",
+    max_active_runs=1, # Prevents API rate limiting and IP bans during historical backfills
     default_args=default_args,
-    start_date=datetime(2023, 1, 1),
+    start_date=datetime(2025, 1, 1),
     schedule="0 6 * * *",
-    catchup=False,
+    catchup=True,
     tags=["elt", "ingestion", "bronze"],
 ) as dag:
 
