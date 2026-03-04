@@ -11,49 +11,51 @@ models:
           - not_null
       - name: sensor_id
         description: "Identifier for the specific sensor instrument."
-        tests:
-          - not_null
-          - is_non_negative
       - name: parameter_name
         description: "Name of the parameter being measured (e.g., pm25, temperature)."
       - name: location_id
         description: "Identifier for the physical monitoring station."
-        tests:
-          - not_null
-          - is_non_negative
       - name: latitude
         description: "Latitude coordinate of the station."
-        tests:
-          - is_between:
-              min_value: -90
-              max_value: 90
       - name: longitude
         description: "Longitude coordinate of the station."
-        tests:
-          - is_between:
-              min_value: -180
-              max_value: 180
-
+      - name: parameter_id
+        description: "Numeric ID of the parameter being measured."
+      - name: unit
+        description: "Standardized unit of measurement for the sensor's parameter (e.g., µg/m³, °C)."
+      - name: logical_date
+        description: "Airflow logical date (execution date) representing the snapshot day."
+      - name: location_name
+        description: "Name of the monitoring location."
+      - name: country_code
+        description: "Two-letter ISO country code."
+      - name: country_name
+        description: "Full name of the country where the station is located."
+# ----------------------------------------------------------------
   - name: int_valid_measurements
     description: "Silver layer view. Cleans raw measurements by standardizing timestamps, filtering out physical anomalies (e.g., out-of-bounds temperatures), and removing null values."
     columns:
       - name: sensor_id
         description: "Identifier for the specific sensor instrument. Used to join with int_sensors_enriched."
-        tests:
-          - not_null
-          - is_non_negative
       - name: parameter_id
         description: "Numeric ID of the parameter being measured."
-        tests:
-          - not_null
-          - is_non_negative
       - name: measurement_value
         description: "The actual recorded value. Physically impossible values and nulls are filtered out in this model."
-        tests:
-          - not_null
       - name: measured_from_utc
         description: "Start time of the measurement interval in UTC."
         tests:
           - not_null
       - name: measured_to_utc
         description: "End time of the measurement interval in UTC."
+      - name: measurement_id
+        description: "Surrogate primary key for the measurement event."
+      - name: measurement_interval
+        description: "Duration of the measurement period (e.g., '1 hour')."
+      - name: has_flags
+        description: "Boolean flag indicating source data quality warnings. Filtered to FALSE in this model."
+      - name: _audit_run_id
+        description: "Airflow run ID associated with the ingestion of this record."
+      - name: logical_date
+        description: "Airflow logical date (execution date) representing the snapshot day."
+      - name: extracted_at
+        description: "UTC timestamp when the measurement was extracted from the source API."

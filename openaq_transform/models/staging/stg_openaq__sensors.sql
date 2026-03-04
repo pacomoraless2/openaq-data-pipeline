@@ -11,6 +11,8 @@ extracted AS (
     SELECT
         -- Surrogate Key: Unique identifier for each snapshot of a sensor
         {{ dbt_utils.generate_surrogate_key(['JSON_VALUE(sensor.id)', '_audit_logical_date']) }} AS sensor_record_id,
+        -- Composite key for testing relationships
+        {{ dbt_utils.generate_surrogate_key(['JSON_VALUE(sensor.id)', 'JSON_VALUE(sensor.parameter.id)']) }} AS sensor_parameter_key,
 
         -- Link to Location (Parent dimension)
         CAST(JSON_VALUE(data.id) AS INT64) AS location_id,

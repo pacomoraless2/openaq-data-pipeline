@@ -28,7 +28,29 @@ models:
           - is_between:
               min_value: -180
               max_value: 180
-
+      - name: location_name
+        description: "Name of the monitoring location."
+      - name: locality
+        description: "City, town, or localized geographic area of the station."
+      - name: country_code
+        description: "Two-letter ISO country code."
+      - name: country_name
+        description: "Full name of the country where the station is located."
+      - name: provider_name
+        description: "Name of the organization or provider maintaining the station and supplying the data."
+      - name: is_mobile
+        description: "Indicates if the station is mobile (true) or stationary (false)."
+      - name: is_monitor
+        description: "Indicates if the station is a reference-grade monitor."
+      - name: timezone
+        description: "Local timezone of the station (e.g., 'Europe/Madrid')."
+      - name: _audit_run_id
+        description: "Airflow run ID associated with the ingestion of this record."
+      - name: logical_date
+        description: "Airflow logical date (execution date) representing the snapshot day."
+      - name: extracted_at
+        description: "UTC timestamp when the record was extracted from the OpenAQ API."
+# ----------------------------------------------------------------
   - name: stg_openaq__measurements
     description: "Silver layer containing air quality measurement facts."
     columns:
@@ -37,6 +59,13 @@ models:
         tests:
           - unique
           - not_null
+      - name: sensor_parameter_key
+        description: "Surrogate key to test the combination of sensor and parameter against the sensors dimension."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_openaq__sensors')
+              field: sensor_parameter_key
       - name: sensor_id
         description: "ID of the sensor associated with the measurement."
         tests:
@@ -51,7 +80,27 @@ models:
         description: "Numeric value of the recorded measurement."
         tests:
           - not_null
-
+      - name: measured_from_utc
+        description: "Start time of the measurement interval in UTC."
+        tests:
+          - not_null
+      - name: measured_to_utc
+        description: "End time of the measurement interval in UTC."
+        tests:
+          - not_null
+      - name: measurement_interval
+        description: "Duration of the measurement period (e.g., '1 hour')."
+        tests:
+          - not_null
+      - name: has_flags
+        description: "Boolean flag indicating if the source API reported any data quality warnings for this measurement."
+      - name: _audit_run_id
+        description: "Airflow run ID associated with the ingestion of this record."
+      - name: logical_date
+        description: "Airflow logical date (execution date) representing the snapshot day."
+      - name: extracted_at
+        description: "UTC timestamp when the measurement was extracted from the OpenAQ API."
+# ----------------------------------------------------------------
   - name: stg_openaq__sensors
     description: "Silver layer containing sensors associated with each location."
     columns:
@@ -60,11 +109,18 @@ models:
         tests:
           - unique
           - not_null
+      - name: sensor_parameter_key
+        description: "Surrogate key representing the unique combination of a sensor and its parameter."
+        tests:
+          - not_null
       - name: location_id
         description: "ID of the parent location where the sensor is installed."
         tests:
           - not_null
           - is_non_negative
+          - relationships:
+              to: ref('stg_openaq__locations')
+              field: location_id
       - name: sensor_id
         description: "Natural identifier for the sensor."
         tests:
@@ -75,3 +131,15 @@ models:
         tests:
           - not_null
           - is_non_negative
+      - name: sensor_name
+        description: "Name or specific designation of the sensor instrument."
+      - name: parameter_name
+        description: "Standardized name of the parameter being measured (e.g., pm25, no2, temperature)."
+      - name: unit
+        description: "Unit of measurement for the parameter (e.g., µg/m³, ppm, °C)."
+      - name: _audit_run_id
+        description: "Airflow run ID associated with the ingestion of this record."
+      - name: logical_date
+        description: "Airflow logical date (execution date) representing the snapshot day."
+      - name: extracted_at
+        description: "UTC timestamp when the sensor metadata was extracted from the OpenAQ API."

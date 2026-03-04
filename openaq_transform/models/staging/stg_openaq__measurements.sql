@@ -15,7 +15,9 @@ extracted AS (
             'JSON_VALUE(data.parameter.id)', 
             'JSON_VALUE(data.period.datetimeFrom.utc)'
         ]) }} AS measurement_id,
-
+        -- Composite key for testing relationships
+        {{ dbt_utils.generate_surrogate_key(['_audit_sensor_id', 'JSON_VALUE(data.parameter.id)']) }} AS sensor_parameter_key,
+        
         -- Foreign Keys 
         CAST(_audit_sensor_id AS INT64) AS sensor_id,
         CAST(JSON_VALUE(data.parameter.id) AS INT64) AS parameter_id,
