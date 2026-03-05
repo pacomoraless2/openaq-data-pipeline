@@ -94,6 +94,24 @@ x-airflow-common:
       condition: service_healthy
 
 services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: airflow_telegram_bot
+    restart: always
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+    environment:
+      - AIRFLOW_VAR_TELEGRAM_BOT_TOKEN=${AIRFLOW_VAR_TELEGRAM_BOT_TOKEN}
+      - AIRFLOW_VAR_TELEGRAM_ALLOWED_USERS=${AIRFLOW_VAR_TELEGRAM_ALLOWED_USERS}
+      - AIRFLOW_VAR_API_BASE_URL=${AIRFLOW_VAR_API_BASE_URL}
+      - AIRFLOW_VAR_API_USER=${AIRFLOW_VAR_API_USER}
+      - AIRFLOW_VAR_API_PASS=${AIRFLOW_VAR_API_PASS}
+
   postgres:
     image: postgres:13
     environment:

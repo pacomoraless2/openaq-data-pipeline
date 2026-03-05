@@ -1,0 +1,11 @@
+# Use an official, lightweight Python image
+FROM python:3.12-slim
+
+# Set the working directory
+WORKDIR /app
+
+# Install the required libraries for the ChatOps bot
+RUN pip install --no-cache-dir "python-telegram-bot[job-queue]" requests
+
+# The command to keep the bot listening infinitely
+CMD ["python", "/opt/airflow/scripts/telegram_bot.py"]

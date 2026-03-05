@@ -15,6 +15,9 @@ from extract_sheets_to_gcs import extract_locations_data
 from extract_openaq_locations import extract_locations
 from extract_measurements import extract_measurements
 
+# Import the Telegram alerting module
+from alerts import telegram_failure_callback
+
 # --- ENVIRONMENT VARIABLES ---
 PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
 DATASET_RAW = os.environ["AIRFLOW_VAR_BQ_DATASET_RAW"]
@@ -35,13 +38,14 @@ default_args = {
     "owner": "data_engineering",
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "on_failure_callback": telegram_failure_callback,
 }
 
 with DAG(
     dag_id="01_openaq_ingestion",
     max_active_runs=1, # Prevents API rate limiting and IP bans during historical backfills
     default_args=default_args,
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2026, 1, 1),
     schedule="0 6 * * *",
     catchup=True,
     tags=["elt", "ingestion", "bronze"],
@@ -203,7 +207,7 @@ with DAG(
     def evaluate_bronze_updates(**kwargs):
         """
         Evaluates if ANY data was extracted during the DAG run by checking XComs.
-        If either locations or measurements were updated, we emit the dataset
+        If either locations or measurements were updated, emit the dataset
         to trigger downstream dbt models.
         """
         loc_count = kwargs["ti"].xcom_pull(task_ids="extract_openaq_details") or 0
@@ -236,7 +240,7 @@ with DAG(
     extract_details_task >> branch_locations_task
     branch_locations_task >> [load_locations_to_bq, skip_locations_load]
 
-    # CRITICAL CHANGE: Measurements ONLY run if locations were successfully loaded
+    # Measurements ONLY run if locations were successfully loaded
     load_locations_to_bq >> extract_measurements_task
 
     # Branching logic for measurements
@@ -248,7 +252,7 @@ with DAG(
     # but eval_data_updates still runs to close the DAG cleanly.
     [
         load_control_table,
-        skip_locations_load,  # Direct path to the end if locations are skipped
+        skip_locations_load,  
         load_raw_measurements_task,
         skip_measurements_load,
     ] >> eval_data_updates
