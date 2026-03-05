@@ -21,6 +21,7 @@ default_args = {
 
 with DAG(
     dag_id="02_openaq_transformation",
+    max_active_runs=1,
     default_args=default_args,
     start_date=datetime(2023, 1, 1),
     # Trigger DAG only when the ingestion DAG signals it is completely done
