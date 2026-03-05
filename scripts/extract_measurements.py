@@ -155,8 +155,8 @@ def extract_measurements(
     Returns the total number of processed records to enable downstream branching.
     """
     dt_run = datetime.strptime(logical_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    date_to = dt_run.isoformat()
-    date_from = (dt_run - timedelta(days=1)).isoformat()
+    date_from = dt_run.isoformat()
+    date_to = (dt_run + timedelta(days=1)).isoformat()
     path_date = f"{dt_run.year}/{dt_run.month:02d}/{dt_run.day:02d}"
     batch_ts = datetime.now(timezone.utc).isoformat()
 
