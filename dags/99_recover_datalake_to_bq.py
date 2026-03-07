@@ -27,7 +27,7 @@ default_args = {
 with DAG(
     dag_id="99_recover_datalake_to_bq",
     default_args=default_args,
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2026, 1, 1),
     schedule=None, 
     catchup=False,
     tags=["elt", "disaster-recovery", "bronze"],
