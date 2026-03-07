@@ -36,6 +36,7 @@ with DAG(
             "source /opt/airflow/dbt_venv/bin/activate && "
             "cd /opt/airflow/openaq_transform && "
             "dbt deps && "
+            "dbt source freshness && "
             "dbt build --profiles-dir ."
         ),
         env={

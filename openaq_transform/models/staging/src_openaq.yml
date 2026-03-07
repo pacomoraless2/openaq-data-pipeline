@@ -5,6 +5,11 @@ sources:
     schema: openaq_raw
     description: "Raw data ingested from the OpenAQ API using Apache Airflow."
 
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    loaded_at_field: "_audit_extracted_at"
+
     tables:
       - name: raw_locations
         description: "Air quality monitoring locations. Partitioned by logical date."
