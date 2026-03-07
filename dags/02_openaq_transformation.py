@@ -1,7 +1,12 @@
 import os
+import sys
 from airflow import DAG, Dataset
 from airflow.operators.bash import BashOperator
 from datetime import datetime, timedelta
+
+# --- TELEGRAM ALERTING MODULE ---
+sys.path.append("/opt/airflow/scripts")
+from alerts import telegram_failure_callback
 
 # --- ENVIRONMENT VARIABLES ---
 PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
@@ -15,8 +20,9 @@ bronze_ready_dataset = Dataset(f"bigquery://{PROJECT_ID}/{DATASET_RAW}/bronze_re
 
 default_args = {
     "owner": "data_engineering",
-    "retries": 1,
+    "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "on_failure_callback": telegram_failure_callback,
 }
 
 with DAG(

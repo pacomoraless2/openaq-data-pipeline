@@ -1,10 +1,15 @@
 import os
+import sys
 from airflow import DAG, Dataset
 from airflow.operators.empty import EmptyOperator
 from airflow.providers.google.cloud.transfers.gcs_to_bigquery import (
     GCSToBigQueryOperator,
 )
 from datetime import datetime, timedelta
+
+# --- TELEGRAM ALERTING MODULE ---
+sys.path.append("/opt/airflow/scripts")
+from alerts import telegram_failure_callback
 
 # --- ENVIRONMENT VARIABLES ---
 PROJECT_ID = os.environ["AIRFLOW_VAR_GCP_PROJECT_ID"]
@@ -22,6 +27,7 @@ default_args = {
     "owner": "data_engineering",
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
+    "on_failure_callback": telegram_failure_callback,
 }
 
 with DAG(
@@ -40,7 +46,7 @@ with DAG(
 ) as dag:
 
     start = EmptyOperator(task_id="start")
-
+    
     # =========================================================================
     # RECOVERY: LOCATIONS
     # =========================================================================
@@ -51,7 +57,7 @@ with DAG(
         source_objects=[f"{BASE_DIR_JSON_LOCS}/*"], 
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_locations",
         source_format="NEWLINE_DELIMITED_JSON",
-        write_disposition="WRITE_TRUNCATE", # <-- THE MAGIC: Drops current data and reloads from scratch
+        write_disposition="WRITE_TRUNCATE", 
         create_disposition="CREATE_IF_NEEDED",
         ignore_unknown_values=True,
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
@@ -76,7 +82,7 @@ with DAG(
         source_objects=[f"{BASE_DIR_JSON_MEAS}/*"],
         destination_project_dataset_table=f"{PROJECT_ID}.{DATASET_RAW}.raw_measurements",
         source_format="NEWLINE_DELIMITED_JSON",
-        write_disposition="WRITE_TRUNCATE", # <-- THE MAGIC
+        write_disposition="WRITE_TRUNCATE",
         create_disposition="CREATE_IF_NEEDED",
         ignore_unknown_values=True,
         time_partitioning={"type": "DAY", "field": "_audit_logical_date"},
